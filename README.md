@@ -4,20 +4,48 @@ Train Text-to-SQL models on 10+ free datasets (~400K examples) and evaluate agai
 
 ## Quick Start
 
-### 1. Setup
+### Option A: Use Pre-cleaned Dataset (Recommended)
+
 ```bash
-# Install dependencies
+# Load 683K deduplicated examples from HuggingFace
+from datasets import load_dataset
+
+dataset = load_dataset(
+    "AsadIsmail/nl2sql-deduplicated", 
+    data_files="*_clean.jsonl", 
+    split="train"
+)
+
+print(f"Total examples: {len(dataset):,}")  # 683,015
+print(dataset[0])  # View first example
+```
+
+**Features of pre-cleaned dataset:**
+- 683K unique examples (input-only deduplication)
+- Conflict resolution (same question → best SQL kept)
+- SQL dialect validation (standard SQL only)
+- Separated by source for weighted sampling
+- See: https://huggingface.co/datasets/AsadIsmail/nl2sql-deduplicated
+
+### Option B: Build Dataset from Scratch
+
+```bash
+# 1. Install dependencies
 uv sync
 source .venv/bin/activate
-```
 
-### 2. Download Data
-```bash
-# Downloads Spider dev set + 10 other datasets
+# 2. Download raw datasets
 python src/nl2sql/data/download_all_datasets.py
+
+# 3. Clean and deduplicate
+python src/nl2sql/data/prepare_unsloth_data.py
+
+# 4. (Optional) Push to your HuggingFace
+python push_to_hf.py
 ```
 
-### 3. Run Baseline Evaluation
+### Run Baseline Evaluation
+
 ```bash
 # Evaluate 3 baseline approaches on Spider dev set
 python src/nl2sql/eval/baseline.py --num-samples 100
@@ -137,14 +165,16 @@ python src/nl2sql/train/train_curriculum_lora.py
 nl2sql/
 ├── src/nl2sql/
 │   ├── data/
-│   │   ├── download_all_datasets.py    # Download 10+ datasets
-│   │   └── synthetic_augmentation.py   # Generate synthetic data
+│   │   ├── download_all_datasets.py       # Download 10+ raw datasets
+│   │   ├── prepare_unsloth_data.py        # Clean, deduplicate, validate
+│   │   └── synthetic_augmentation.py      # Generate synthetic data
 │   ├── train/
-│   │   └── train_curriculum_lora.py    # Curriculum training
+│   │   └── train_curriculum_lora.py       # Curriculum training
 │   └── eval/
-│       └── evaluate_spider.py          # Evaluation
-├── run_pipeline.py                     # Full pipeline runner
-└── pyproject.toml                      # Dependencies
+│       └── baseline.py                    # Baseline evaluation
+├── push_to_hf.py                          # Upload dataset to HuggingFace
+├── run_pipeline.py                        # Full pipeline runner
+└── pyproject.toml                         # Dependencies
 ```
 
 ## Configuration

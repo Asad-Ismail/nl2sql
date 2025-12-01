@@ -159,7 +159,7 @@ try:
         data.append({
             "dataset": "know-sql",
             "question": ex.get("question", ""),
-            "sql": ex.get("answer", ""),  # FIX: Field is called 'answer', not 'query'
+            "sql": ex.get("answer", ""),  # Field is called 'answer', not 'query'
             "db_id": "",
             "context": ex.get("context", "")
         })

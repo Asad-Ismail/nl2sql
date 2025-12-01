@@ -188,11 +188,10 @@ SELECT"""
         total_start = time.time()
         
         prompt = f"""-- Database Schema
-{schema}
-
--- Question: {question}
--- Generate a valid SQL query:
-SELECT"""
+                {schema}
+                -- Question: {question}
+                -- Generate a valid SQL query:
+                SELECT"""
         
         for attempt in range(max_attempts):
             sql = "SELECT" + self.generate_sql(prompt, max_new_tokens=150)
