@@ -278,8 +278,8 @@ SELECT"""
                 # Get schema (simplified - you may need to load actual schema)
                 schema = item.get("context", f"Database: {db_id}")
                 
-                # Database path (adjust based on your setup)
-                db_path = f"nl2sql_data/spider/database/{db_id}/{db_id}.sqlite"
+                # Database path
+                db_path = f"nl2sql_data/database/spider_data/database/{db_id}/{db_id}.sqlite"
                 
                 try:
                     if method_name == "zero_shot":
