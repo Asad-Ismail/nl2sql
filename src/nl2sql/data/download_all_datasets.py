@@ -158,8 +158,8 @@ try:
     for ex in know_sql:
         data.append({
             "dataset": "know-sql",
-            "question": ex.get("question", ex.get("input", "")),
-            "sql": ex.get("query", ex.get("output", "")),
+            "question": ex.get("question", ""),
+            "sql": ex.get("answer", ""),  # FIX: Field is called 'answer', not 'query'
             "db_id": "",
             "context": ex.get("context", "")
         })
