@@ -30,6 +30,37 @@ class SpiderEvaluator:
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
+        self.schemas = self._load_schemas()
+    
+    def _load_schemas(self) -> Dict[str, str]:
+        """Load database schemas from Spider tables.json"""
+        schema_file = Path("nl2sql_data/database/spider_data/tables.json")
+        
+        if not schema_file.exists():
+            print("⚠️  Warning: tables.json not found. Using minimal schema info.")
+            return {}
+        
+        with open(schema_file) as f:
+            tables_data = json.load(f)
+        
+        schemas = {}
+        for db in tables_data:
+            db_id = db['db_id']
+            table_names = db['table_names_original']
+            column_names = db['column_names_original']
+            column_types = db['column_types']
+            
+            # Format schema as CREATE TABLE statements
+            schema_lines = []
+            for table_idx, table_name in enumerate(table_names):
+                cols = [(col[1], column_types[i]) for i, col in enumerate(column_names) if col[0] == table_idx]
+                if cols:
+                    col_defs = [f"{name} {dtype}" for name, dtype in cols]
+                    schema_lines.append(f"CREATE TABLE {table_name} ({', '.join(col_defs)})")
+            
+            schemas[db_id] = "\n".join(schema_lines)
+        
+        return schemas
         
     def load_model(self):
         """Load model for inference"""
@@ -120,10 +151,10 @@ class SpiderEvaluator:
 
 -- Question: {question}
 -- SQL:
-SELECT"""
+"""
         
         start_time = time.time()
-        sql = "SELECT" + self.generate_sql(prompt, max_new_tokens=150)
+        sql = self.generate_sql(prompt, max_new_tokens=150)
         inference_time = time.time() - start_time
         
         is_valid, error, results = self.execute_sql(sql, db_path)
@@ -158,10 +189,10 @@ SELECT"""
         prompt += f"-- Now convert this question:\n"
         prompt += f"-- Schema:\n{schema}\n"
         prompt += f"-- Question: {question}\n"
-        prompt += f"-- SQL:\nSELECT"
+        prompt += f"-- SQL:\n"
         
         start_time = time.time()
-        sql = "SELECT" + self.generate_sql(prompt, max_new_tokens=150)
+        sql = self.generate_sql(prompt, max_new_tokens=150)
         inference_time = time.time() - start_time
         
         is_valid, error, results = self.execute_sql(sql, db_path)
@@ -188,13 +219,13 @@ SELECT"""
         total_start = time.time()
         
         prompt = f"""-- Database Schema
-                {schema}
-                -- Question: {question}
-                -- Generate a valid SQL query:
-                SELECT"""
+        {schema}
+        -- Question: {question}
+        -- Generate a valid SQL query:
+        """
         
         for attempt in range(max_attempts):
-            sql = "SELECT" + self.generate_sql(prompt, max_new_tokens=150)
+            sql = self.generate_sql(prompt, max_new_tokens=150)
             is_valid, error, results = self.execute_sql(sql, db_path)
             
             attempts.append({
@@ -209,7 +240,7 @@ SELECT"""
             # Add error feedback for next attempt
             prompt += f"\n\n-- Previous SQL had error: {error}\n"
             prompt += f"-- Previous SQL: {sql}\n"
-            prompt += f"-- Fix the SQL query:\nSELECT"
+            prompt += f"-- Fix the SQL query:\n"
         
         total_time = time.time() - total_start
         
@@ -274,8 +305,8 @@ SELECT"""
                 db_id = item.get("db_id", "")
                 gold_sql = item.get("query", item.get("sql", ""))
                 
-                # Get schema (simplified - you may need to load actual schema)
-                schema = item.get("context", f"Database: {db_id}")
+                # Get actual schema from tables.json
+                schema = self.schemas.get(db_id, f"Database: {db_id}")
                 
                 # Database path
                 db_path = f"nl2sql_data/database/spider_data/database/{db_id}/{db_id}.sqlite"

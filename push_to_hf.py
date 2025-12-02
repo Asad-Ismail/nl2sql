@@ -63,7 +63,13 @@ A curated and deduplicated Text-to-SQL training dataset with **{stats['valid_uni
 
 ## 🎯 Key Features
 
-### 1. **Conflict Resolution** (Critical for Training)
+### 1. **Schema Enrichment** (NEW)
+- **All Spider examples enriched** with full CREATE TABLE schemas from tables.json
+- Consistent schema format across all datasets (100% coverage)
+- Models receive complete table/column information during training
+- Matches evaluation format for zero train-test distribution mismatch
+
+### 2. **Conflict Resolution** (Critical for Training)
 - Uses **question-only deduplication** to prevent conflicting labels
 - When same question appears with different SQL, keeps highest-quality version based on:
   - Spider (Priority 5) → Benchmark quality
@@ -73,12 +79,12 @@ A curated and deduplicated Text-to-SQL training dataset with **{stats['valid_uni
 
 This prevents gradient confusion where model sees same input with different outputs.
 
-### 2. **SQL Dialect Validation**
+### 3. **SQL Dialect Validation**
 - All queries validated for standard SQL compatibility
 - Rejected: DuckDB-specific (PRAGMA, DESCRIBE), PostgreSQL-specific (RETURNING, ILIKE, ::)
 - {stats['invalid_sql']:,} invalid queries filtered out
 
-### 3. **Separated for Weighted Sampling**
+### 4. **Separated for Weighted Sampling**
 Each source is in a separate file to enable weighted training:
 
 | Dataset | Examples | Recommended Weight | Reason |
@@ -252,7 +258,7 @@ Each example is a JSON object with:
   "question": "How many singers do we have?",
   "sql": "SELECT COUNT(*) FROM singer",
   "db_id": "concert_singer",
-  "context": "Database: concert_singer",
+  "context": "CREATE TABLE stadium (Stadium_ID number, Location text, Name text, Capacity number, Highest number, Lowest number, Average number)\\nCREATE TABLE singer (Singer_ID number, Name text, Country text, Song_Name text, Song_release_year text, Age number, Is_male others)\\nCREATE TABLE concert (concert_ID number, concert_Name text, Theme text, Stadium_ID text, Year text)\\nCREATE TABLE singer_in_concert (concert_ID number, Singer_ID text)",
   "source_dataset": "spider"
 }}
 ```
@@ -261,14 +267,17 @@ Each example is a JSON object with:
 - `question` (str): Natural language question
 - `sql` (str): Target SQL query (standard SQL)
 - `db_id` (str): Database identifier (for Spider examples)
-- `context` (str): Schema/database context
+- `context` (str): Full CREATE TABLE schemas with columns/types
 - `dataset` (str): Original source dataset
 - `source_dataset` (str): Dataset kept after deduplication
+
+**Note**: Spider examples now include full CREATE TABLE schemas instead of minimal "Database: {{db_id}}" context.
 
 ## 📈 Statistics
 
 ### Overall
 - **Total Loaded**: {stats['total_loaded']:,} raw examples
+- **Spider Enriched with Schemas**: {stats.get('spider_enriched', 'N/A'):,} examples
 - **Invalid SQL**: {stats['invalid_sql']:,} ({100*stats['invalid_sql']/stats['total_loaded']:.1f}%)
 - **Duplicates**: {stats['duplicates']:,} ({100*stats['duplicates']/stats['total_loaded']:.1f}%)
 - **Conflicts Resolved**: {stats['conflicts_resolved']:,} same question, different SQL

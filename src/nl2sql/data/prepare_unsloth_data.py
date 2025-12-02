@@ -220,6 +220,7 @@ class UnslothDatasetPreparer:
         
         self.validator = SQLDialectValidator()
         self.global_deduplicator = DatasetDeduplicator()  # Global across all datasets
+        self.schemas = self._load_schemas()  # Load Spider schemas for enrichment
         
         self.stats = {
             'total_loaded': 0,
@@ -227,9 +228,55 @@ class UnslothDatasetPreparer:
             'duplicates': 0,
             'conflicts_resolved': 0,
             'valid_unique': 0,
+            'spider_enriched': 0,
             'per_dataset': {},
             'deduplication_strategy': 'Input-only (question) with conflict resolution via priority'
         }
+    
+    def _load_schemas(self) -> Dict[str, str]:
+        """
+        Load database schemas from Spider tables.json.
+        
+        Returns:
+            Dictionary mapping db_id to formatted CREATE TABLE schema string
+        """
+        tables_json = self.data_dir / 'database' / 'spider_data' / 'tables.json'
+        
+        if not tables_json.exists():
+            print(f"⚠️  Warning: {tables_json} not found, Spider schemas will not be enriched")
+            return {}
+        
+        try:
+            with open(tables_json) as f:
+                tables_data = json.load(f)
+            
+            schemas = {}
+            for db in tables_data:
+                db_id = db['db_id']
+                table_names = db['table_names_original']
+                column_names = db['column_names_original']
+                column_types = db['column_types']
+                
+                schema_lines = []
+                for table_idx, table_name in enumerate(table_names):
+                    # Get columns for this table
+                    cols = [
+                        (col[1], column_types[i]) 
+                        for i, col in enumerate(column_names) 
+                        if col[0] == table_idx
+                    ]
+                    if cols:
+                        col_defs = [f"{name} {dtype}" for name, dtype in cols]
+                        schema_lines.append(f"CREATE TABLE {table_name} ({', '.join(col_defs)})")
+                
+                schemas[db_id] = "\n".join(schema_lines)
+            
+            print(f"✓ Loaded {len(schemas)} Spider database schemas")
+            return schemas
+            
+        except Exception as e:
+            print(f"⚠️  Error loading schemas: {e}")
+            return {}
     
     def load_jsonl(self, filepath: Path) -> List[Dict]:
         """Load JSONL file"""
@@ -253,10 +300,17 @@ class UnslothDatasetPreparer:
         self, 
         dataset_name: str, 
         input_file: Path,
-        validate_dialect: bool = True
+        validate_dialect: bool = True,
+        enrich_spider_schemas: bool = True
     ) -> Tuple[int, int, int]:
         """
         Process single dataset with validation (deduplication is global)
+        
+        Args:
+            dataset_name: Name of the dataset
+            input_file: Path to input JSONL file
+            validate_dialect: Whether to validate SQL dialect
+            enrich_spider_schemas: Whether to enrich Spider examples with full schemas
         
         Returns:
             (loaded_count, invalid_count, processed_count)
@@ -285,6 +339,17 @@ class UnslothDatasetPreparer:
             if 'question' not in ex or 'sql' not in ex:
                 invalid_count += 1
                 continue
+            
+            # Enrich Spider examples with full schemas from tables.json
+            if dataset_name == 'spider' and enrich_spider_schemas and self.schemas:
+                db_id = ex.get('db_id', '')
+                context = ex.get('context', '')
+                
+                # Only enrich if doesn't already have schema
+                if db_id and 'CREATE TABLE' not in context:
+                    if db_id in self.schemas:
+                        ex['context'] = self.schemas[db_id]
+                        self.stats['spider_enriched'] += 1
             
             # Validate SQL dialect
             if validate_dialect:
@@ -512,6 +577,7 @@ class UnslothDatasetPreparer:
         print(f"\n📊 Overall Statistics:")
         print(f"  Strategy: {self.stats['deduplication_strategy']}")
         print(f"  Total loaded: {self.stats['total_loaded']:,}")
+        print(f"  Spider enriched with schemas: {self.stats['spider_enriched']:,}")
         print(f"  Invalid SQL: {self.stats['invalid_sql']:,}")
         print(f"  Duplicates: {self.stats['duplicates']:,}")
         print(f"  Conflicts resolved: {self.stats['conflicts_resolved']:,} (same Q, different SQL)")
