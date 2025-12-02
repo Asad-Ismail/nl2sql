@@ -208,3 +208,4 @@ __marimo__/
 
 # NL2SQL Datasets
 nl2sql_data/
+wandb/

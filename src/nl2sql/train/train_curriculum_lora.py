@@ -32,7 +32,6 @@ import logging
 from datetime import datetime
 import time
 from tqdm import tqdm
-import wandb
 
 # Setup logging
 logging.basicConfig(
@@ -288,7 +287,7 @@ class CurriculumTrainer:
         dataset,
         stage_name: str,
         num_epochs: int = 3,
-        batch_size: int = 4,
+        batch_size: int = 2,
         learning_rate: float = 2e-4
     ):
         """Train single curriculum stage"""
@@ -315,13 +314,11 @@ class CurriculumTrainer:
             logging_steps=10,
             save_strategy="epoch",
             save_total_limit=2,
-            report_to=["wandb"],  # Enable W&B logging
+            report_to="none",
             warmup_steps=100,
             optim="adamw_torch",
             load_best_model_at_end=False,
-            ddp_find_unused_parameters=False,
-            logging_first_step=True,
-            log_level="info"
+            ddp_find_unused_parameters=False
         )
         
         # Check for existing checkpoints in this stage
@@ -408,34 +405,10 @@ def main():
     
     start_time = time.time()
     
-    # Initialize Weights & Biases
-    wandb.init(
-        project="nl2sql-training",
-        name=f"mixed-training-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-        config={
-            "model": "codellama/CodeLlama-7b-hf",
-            "lora_r": 16,
-            "lora_alpha": 32,
-            "lora_dropout": 0.1,
-            "batch_size": 4,
-            "gradient_accumulation_steps": 4,
-            "effective_batch_size": 16,
-            "learning_rate": 2e-4,
-            "num_epochs": 3,
-            "warmup_steps": 100,
-            "dataset_weights": {
-                "spider": 0.5,
-                "sqale": 0.3,
-                "sql_context": 0.03
-            }
-        }
-    )
-    
     logger.info("\n" + "="*70)
     logger.info("NL2SQL Curriculum Training Pipeline")
     logger.info("="*70)
     logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"W&B Run: {wandb.run.name}")
     logger.info("="*70 + "\n")
     
     # Define datasets with configurations matching HuggingFace deduplicated dataset
@@ -510,9 +483,6 @@ def main():
     logger.info(f"Models saved to: {trainer.output_dir}")
     logger.info(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("="*70 + "\n")
-    
-    # Finish W&B run
-    wandb.finish()
 
 
 if __name__ == "__main__":
