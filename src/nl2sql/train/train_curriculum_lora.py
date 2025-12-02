@@ -32,6 +32,7 @@ import logging
 from datetime import datetime
 import time
 from tqdm import tqdm
+import wandb
 
 # Setup logging
 logging.basicConfig(
@@ -245,8 +246,8 @@ class CurriculumTrainer:
         self.tokenizer.pad_token = self.tokenizer.eos_token
         logger.info(f"✓ Tokenizer loaded (vocab size: {len(self.tokenizer)})")
         
-        # Check if resuming from checkpoint
-        if resume_from_checkpoint and os.path.exists(resume_from_checkpoint):
+        # Check if resuming from checkpoint (must be a valid path, not just True)
+        if resume_from_checkpoint and isinstance(resume_from_checkpoint, str) and os.path.exists(resume_from_checkpoint):
             logger.info(f"\n📂 Resuming from checkpoint: {resume_from_checkpoint}")
             self.model = AutoModelForCausalLM.from_pretrained(
                 resume_from_checkpoint,
@@ -255,6 +256,8 @@ class CurriculumTrainer:
                 trust_remote_code=True
             )
         else:
+            if resume_from_checkpoint:
+                logger.info("\n⚠️  No valid checkpoint found, loading base model...")
             logger.info(f"\n📥 Loading base model from HuggingFace...")
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
@@ -312,23 +315,25 @@ class CurriculumTrainer:
             logging_steps=10,
             save_strategy="epoch",
             save_total_limit=2,
-            report_to="none",
+            report_to=["wandb"],  # Enable W&B logging
             warmup_steps=100,
             optim="adamw_torch",
             load_best_model_at_end=False,
-            ddp_find_unused_parameters=False
+            ddp_find_unused_parameters=False,
+            logging_first_step=True,
+            log_level="info"
         )
         
         # Check for existing checkpoints in this stage
         checkpoint_dir = None
-        if self.resume_from_checkpoint:
+        if os.path.exists(stage_output_dir):
             checkpoint_dirs = [d for d in os.listdir(stage_output_dir) 
                              if d.startswith('checkpoint-') and os.path.isdir(os.path.join(stage_output_dir, d))]
             if checkpoint_dirs:
                 # Get latest checkpoint
                 checkpoint_dirs.sort(key=lambda x: int(x.split('-')[1]))
                 checkpoint_dir = os.path.join(stage_output_dir, checkpoint_dirs[-1])
-                logger.info(f"📂 Found checkpoint: {checkpoint_dir}")
+                logger.info(f"📂 Found existing checkpoint: {checkpoint_dir}")
         
         trainer = Trainer(
             model=self.model,
@@ -403,10 +408,34 @@ def main():
     
     start_time = time.time()
     
+    # Initialize Weights & Biases
+    wandb.init(
+        project="nl2sql-training",
+        name=f"mixed-training-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+        config={
+            "model": "codellama/CodeLlama-7b-hf",
+            "lora_r": 16,
+            "lora_alpha": 32,
+            "lora_dropout": 0.1,
+            "batch_size": 4,
+            "gradient_accumulation_steps": 4,
+            "effective_batch_size": 16,
+            "learning_rate": 2e-4,
+            "num_epochs": 3,
+            "warmup_steps": 100,
+            "dataset_weights": {
+                "spider": 0.5,
+                "sqale": 0.3,
+                "sql_context": 0.03
+            }
+        }
+    )
+    
     logger.info("\n" + "="*70)
     logger.info("NL2SQL Curriculum Training Pipeline")
     logger.info("="*70)
     logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"W&B Run: {wandb.run.name}")
     logger.info("="*70 + "\n")
     
     # Define datasets with configurations matching HuggingFace deduplicated dataset
@@ -460,7 +489,7 @@ def main():
         model_name="codellama/CodeLlama-7b-hf",
         output_dir="models/nl2sql-curriculum-lora",
         use_curriculum=True,
-        resume_from_checkpoint=True  # Auto-resume if checkpoint exists
+        resume_from_checkpoint=None  # Set to checkpoint path to resume, or None to start fresh
     )
     
     # Train with mixed data (all datasets combined with weights)
@@ -481,6 +510,9 @@ def main():
     logger.info(f"Models saved to: {trainer.output_dir}")
     logger.info(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("="*70 + "\n")
+    
+    # Finish W&B run
+    wandb.finish()
 
 
 if __name__ == "__main__":

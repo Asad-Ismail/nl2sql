@@ -13,9 +13,8 @@ dependencies = [
     "sqlparse>=0.4.4",
     "tqdm>=4.65.0",
     "scikit-learn>=1.3.0",
-    "peft>=0.7.0",
-    "bitsandbytes>=0.41.0",
-    "accelerate>=0.24.0",
+  MKI8U7654EWA`≥/;P.0IU7Y6T5RE
+    "wandb>=0.16.0",
 ]
 
 [project.optional-dependencies]
