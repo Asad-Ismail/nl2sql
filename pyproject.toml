@@ -5,7 +5,7 @@ description = "Natural Language to SQL fine-tuning"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "torch==2.4.0",
+    "torch>=2.5.0",
     "transformers==4.56.0",       # ok for unsloth-zoo
     "datasets==3.6.0",            # valid on PyPI and <4.0 — satisfies unsloth-zoo
     "pandas>=2.0.0",
@@ -14,10 +14,9 @@ dependencies = [
     "tqdm>=4.65.0",
     "scikit-learn>=1.3.0",
     "peft==0.13.0",
-    "bitsandbytes==0.44.1",
+    "bitsandbytes>=0.45.0; sys_platform == 'linux'",
     "accelerate>=1.4.0",
     "wandb>=0.16.0",
-    "triton==3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -32,7 +31,7 @@ unsloth = [
     "unsloth @ git+https://github.com/unslothai/unsloth.git",
     "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
     "trl>=0.19.1,<=0.24.0",
-    "xformers==0.0.27.post2",
+    "xformers>=0.0.28",
 ]
 
 
