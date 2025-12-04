@@ -1,14 +1,28 @@
 """
-Baseline Evaluation for NL2SQL on Spider Dataset
+Baseline Evaluation for NL2SQL on Spider Dataset (using vLLM)
 
 Evaluates 3 standard baseline approaches:
 1. Zero-shot: Single LLM call without examples
-2. Few-shot: With 3 similar examples  
-3. Self-correction: Generate → Execute → Fix errors (up to 3 attempts)
+2. Few-shot: With 2 similar examples  
+3. Self-correction: Generate → Fix execution errors → LLM validation → Result comparison
+
+Key improvements:
+- Uses vLLM for 3-5x faster inference
+- Uses HuggingFace datasets instead of local files
+- LLM-based semantic validation (asks if SQL answers the question)
+- Compares execution results with gold standard
+- Simpler and more reliable than SQL parsing
+
+Requirements:
+    pip install vllm openai datasets tqdm
+
+Start vLLM server first:
+    vllm serve codellama/CodeLlama-7b-Instruct-hf --host 0.0.0.0 --port 8000
 
 Usage:
-    python src/nl2sql/eval/baseline.py --model codellama/CodeLlama-7b-hf
-    python src/nl2sql/eval/baseline.py --model meta-llama/Llama-2-7b-hf --num-samples 50
+    python baseline_improved.py --model codellama/CodeLlama-7b-hf
+    python baseline_improved.py --model meta-llama/Llama-2-7b-hf --num-samples 50
+    python baseline_improved.py --vllm-url http://localhost:8000/v1
 """
 
 import os
@@ -17,24 +31,80 @@ import sqlite3
 import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from openai import OpenAI
 from tqdm import tqdm
 import time
+from datasets import load_dataset
+
+
+class SemanticValidator:
+    """Validate SQL queries using LLM and result comparison"""
+    
+    def __init__(self, generate_func):
+        """
+        Args:
+            generate_func: Function to generate text from LLM
+        """
+        self.generate_func = generate_func
+    
+    def ask_llm_validation(self, question: str, sql: str, schema: str) -> str:
+        """
+        Ask LLM if the SQL correctly answers the question
+        
+        Returns:
+            LLM's assessment (yes/no with brief explanation)
+        """
+        prompt = f"""-- Database Schema
+{schema}
+
+-- Question: {question}
+-- SQL Query: {sql}
+
+Does this SQL query correctly answer the question? Answer with 'Yes' or 'No' followed by a brief explanation.
+Answer:"""
+        
+        response = self.generate_func(prompt, max_new_tokens=100)
+        return response.strip()
+    
+    @staticmethod
+    def compare_results(generated_results: List, gold_results: List) -> Tuple[bool, str]:
+        """
+        Compare generated results with gold standard results
+        
+        Returns:
+            (matches, feedback)
+        """
+        if generated_results is None or gold_results is None:
+            return False, "Cannot compare - one or both queries failed to execute"
+        
+        # Convert to sets for comparison (order-independent)
+        gen_set = set(tuple(row) if isinstance(row, (list, tuple)) else (row,) for row in generated_results)
+        gold_set = set(tuple(row) if isinstance(row, (list, tuple)) else (row,) for row in gold_results)
+        
+        if gen_set == gold_set:
+            return True, "Results match gold standard"
+        
+        # Provide feedback on differences
+        if len(gen_set) != len(gold_set):
+            return False, f"Result count mismatch: generated {len(gen_set)} rows, expected {len(gold_set)} rows"
+        
+        return False, "Results differ from gold standard"
 
 
 class SpiderEvaluator:
-    """Evaluate baseline approaches on Spider dataset"""
+    """Evaluate baseline approaches on Spider dataset using vLLM"""
     
-    def __init__(self, model_name: str = "codellama/CodeLlama-7b-hf"):
+    def __init__(self, model_name: str = "codellama/CodeLlama-7b-hf", 
+                 vllm_url: str = "http://localhost:8000/v1"):
         self.model_name = model_name
-        self.tokenizer = None
-        self.model = None
+        self.vllm_url = vllm_url
+        self.client = None
+        self.semantic_validator = None
         self.schemas = self._load_schemas()
     
     def _load_schemas(self) -> Dict[str, str]:
         """Load database schemas from Spider tables.json"""
-        schema_file = Path("nl2sql_data/database/spider_data/tables.json")
+        schema_file = Path("database/spider_data/tables.json")
         
         if not schema_file.exists():
             print("⚠️  Warning: tables.json not found. Using minimal schema info.")
@@ -61,45 +131,124 @@ class SpiderEvaluator:
             schemas[db_id] = "\n".join(schema_lines)
         
         return schemas
+    
+    def load_dataset_from_hf(self, num_samples: Optional[int] = None) -> List[Dict]:
+        """
+        Load Spider evaluation dataset from HuggingFace
         
-    def load_model(self):
-        """Load model for inference"""
+        Args:
+            num_samples: Number of samples to load (None for all)
+            
+        Returns:
+            List of evaluation examples
+        """
         print(f"\n{'='*60}")
-        print(f"Loading model: {self.model_name}")
+        print("Loading Spider Dev Dataset from HuggingFace")
         print(f"{'='*60}\n")
         
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        try:
+            # Load from HuggingFace
+            dataset = load_dataset(
+                "AsadIsmail/nl2sql-deduplicated",
+                data_files="spider_dev_clean.jsonl",
+                split="train"
+            )
+            
+            print(f"✓ Loaded {len(dataset):,} examples from HuggingFace")
+            
+            # Convert to list of dicts
+            data = []
+            for item in dataset:
+                data.append({
+                    "question": item["question"],
+                    "query": item.get("sql", ""),  # Use 'sql' field from cleaned dataset
+                    "db_id": item.get("db_id", ""),
+                    "context": item.get("context", "")
+                })
+            
+            # Subsample if requested
+            if num_samples and num_samples < len(data):
+                print(f"  Subsampling to {num_samples} examples")
+                data = data[:num_samples]
+            
+            print(f"  Using {len(data):,} examples for evaluation\n")
+            
+            return data
+            
+        except Exception as e:
+            print(f"❌ Error loading from HuggingFace: {e}")
+            print("\nFalling back to local file if available...")
+            
+            # Fallback to local file
+            local_file = "nl2sql_data/eval/spider_dev.jsonl"
+            if os.path.exists(local_file):
+                print(f"✓ Loading from local file: {local_file}")
+                with open(local_file) as f:
+                    data = [json.loads(line) for line in f]
+                
+                if num_samples:
+                    data = data[:num_samples]
+                
+                return data
+            else:
+                raise FileNotFoundError(
+                    f"Could not load from HuggingFace or local file. "
+                    f"Please run: python src/nl2sql/data/download_all_datasets.py"
+                )
         
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True
+    def load_model(self):
+        """Connect to vLLM server via OpenAI API"""
+        print(f"\n{'='*60}")
+        print(f"Connecting to vLLM server: {self.vllm_url}")
+        print(f"Model: {self.model_name}")
+        print(f"{'='*60}\n")
+        
+        # Initialize OpenAI client pointing to vLLM server
+        self.client = OpenAI(
+            api_key="EMPTY",  # vLLM doesn't require API key
+            base_url=self.vllm_url
         )
         
-        print("✓ Model loaded successfully\n")
+        # Test connection
+        try:
+            # Simple test to verify server is running
+            response = self.client.completions.create(
+                model=self.model_name,
+                prompt="SELECT",
+                max_tokens=1,
+                temperature=0.1
+            )
+            print("✓ Successfully connected to vLLM server\n")
+        except Exception as e:
+            print(f"❌ Error connecting to vLLM server: {e}")
+            print(f"\nMake sure vLLM server is running:")
+            print(f"  vllm serve {self.model_name} --host 0.0.0.0 --port 8000\n")
+            raise
+        
+        # Initialize semantic validator with generate function
+        self.semantic_validator = SemanticValidator(self.generate_sql)
+        
+        print("✓ Client initialized successfully\n")
     
     def generate_sql(self, prompt: str, max_new_tokens: int = 256) -> str:
-        """Generate SQL from prompt"""
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
+        """Generate SQL from prompt using vLLM via OpenAI API"""
+        try:
+            response = self.client.completions.create(
+                model=self.model_name,
+                prompt=prompt,
+                max_tokens=max_new_tokens,
                 temperature=0.1,
-                do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id
+                top_p=1.0,
+                stop=["\n\n", "###", "Question:", "Schema:"]  # Stop at common delimiters
             )
-        
-        generated = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Extract SQL from response (remove the prompt)
-        sql = generated[len(self.tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True)):]
-        sql = self._extract_sql(sql)
-        return sql.strip()
+            
+            generated = response.choices[0].text
+            sql = self._extract_sql(generated)
+            return sql.strip()
+            
+        except Exception as e:
+            print(f"Error generating SQL: {e}")
+            return ""
     
     def _extract_sql(self, text: str) -> str:
         """Extract SQL query from generated text"""
@@ -182,9 +331,9 @@ class SpiderEvaluator:
         # Add 2-3 examples
         for i, ex in enumerate(examples[:2], 1):
             prompt += f"-- Example {i}\n"
-            prompt += f"-- Schema: {ex.get('schema', 'N/A')}\n"
+            prompt += f"-- Schema: {ex.get('context', 'N/A')}\n"
             prompt += f"-- Question: {ex['question']}\n"
-            prompt += f"-- SQL:\n{ex['sql']}\n\n"
+            prompt += f"-- SQL:\n{ex.get('query', ex.get('sql', ''))}\n\n"
         
         prompt += f"-- Now convert this question:\n"
         prompt += f"-- Schema:\n{schema}\n"
@@ -208,48 +357,129 @@ class SpiderEvaluator:
         }
     
     # ================================================================
-    # Baseline 3: Self-correction
+    # Baseline 3: Self-correction with LLM Validation and Result Comparison
     # ================================================================
     
     def self_correction(self, question: str, schema: str, db_path: str,
-                       max_attempts: int = 3) -> Dict:
-        """Baseline 3: Generate, execute, fix errors iteratively"""
+                       gold_sql: str, max_attempts: int = 3) -> Dict:
+        """
+        Baseline 3: Iterative improvement with execution fixes and semantic validation
+        
+        Process:
+        1. Generate SQL and fix execution errors
+        2. Once valid, ask LLM if it correctly answers the question
+        3. If LLM says no, retry with semantic feedback
+        4. Compare results with gold standard
+        5. If results don't match, provide feedback (but don't retry - already at max)
+        
+        Total attempts: up to max_attempts (default 3)
+        Each attempt includes: generation → execution → semantic check → result comparison
+        """
         
         attempts = []
         total_start = time.time()
         
-        prompt = f"""-- Database Schema
-        {schema}
-        -- Question: {question}
-        -- Generate a valid SQL query:
-        """
+        # Execute gold SQL once to get expected results
+        gold_valid, gold_error, gold_results = self.execute_sql(gold_sql, db_path)
         
-        for attempt in range(max_attempts):
+        prompt = f"""-- Database Schema
+{schema}
+
+-- Question: {question}
+-- Generate a valid SQL query:
+"""
+        
+        for attempt_num in range(max_attempts):
+            # Generate SQL
             sql = self.generate_sql(prompt, max_new_tokens=150)
+            
+            # Try to execute
             is_valid, error, results = self.execute_sql(sql, db_path)
             
-            attempts.append({
+            # Initialize attempt record
+            attempt_record = {
+                "attempt_number": attempt_num + 1,
                 "sql": sql,
                 "is_valid": is_valid,
-                "error": error
-            })
+                "execution_error": error,
+                "llm_validation": None,
+                "results_match_gold": False,
+                "results_feedback": None
+            }
             
-            if is_valid:
+            # If execution failed, add error feedback and continue to next attempt
+            if not is_valid:
+                attempt_record["results_feedback"] = "Query failed to execute"
+                attempts.append(attempt_record)
+                
+                # Add execution error feedback for next attempt
+                prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
+                prompt += f"\n-- SQL: {sql}"
+                prompt += f"\n-- Execution error: {error}"
+                prompt += f"\n-- Fix the error and try again:\n"
+                continue
+            
+            # Execution succeeded - now do semantic validation
+            llm_validation = self.semantic_validator.ask_llm_validation(
+                question, sql, schema
+            )
+            attempt_record["llm_validation"] = llm_validation
+            
+            # Compare results with gold standard
+            if gold_valid:
+                results_match, results_feedback = self.semantic_validator.compare_results(
+                    results, gold_results
+                )
+                attempt_record["results_match_gold"] = results_match
+                attempt_record["results_feedback"] = results_feedback
+            else:
+                attempt_record["results_feedback"] = "Cannot compare - gold query failed"
+            
+            attempts.append(attempt_record)
+            
+            # Check if we got it right (LLM says yes AND results match)
+            # LLM validation starts with "Yes" or "yes" if correct
+            llm_says_correct = llm_validation and llm_validation.lower().startswith('yes')
+            
+            if llm_says_correct and results_match:
+                # Perfect! SQL is correct both semantically and in results
                 break
             
-            # Add error feedback for next attempt
-            prompt += f"\n\n-- Previous SQL had error: {error}\n"
-            prompt += f"-- Previous SQL: {sql}\n"
-            prompt += f"-- Fix the SQL query:\n"
+            # If this is the last attempt, we're done (no more retries)
+            if attempt_num >= max_attempts - 1:
+                break
+            
+            # Build feedback for next attempt
+            feedback_parts = []
+            
+            if not llm_says_correct:
+                feedback_parts.append(f"LLM validation: {llm_validation}")
+            
+            if not results_match:
+                feedback_parts.append(f"Result comparison: {results_feedback}")
+            
+            combined_feedback = "\n".join(feedback_parts)
+            
+            # Add feedback for next attempt
+            prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
+            prompt += f"\n-- SQL: {sql}"
+            prompt += f"\n-- Feedback: {combined_feedback}"
+            prompt += f"\n-- Improve the SQL query:\n"
         
+        # Get final attempt results
+        final_attempt = attempts[-1]
         total_time = time.time() - total_start
         
         return {
             "method": "self_correction",
-            "sql": attempts[-1]["sql"],
-            "is_valid": attempts[-1]["is_valid"],
-            "error": attempts[-1]["error"],
-            "results": results if attempts[-1]["is_valid"] else None,
+            "sql": final_attempt["sql"],
+            "is_valid": final_attempt["is_valid"],
+            "error": final_attempt["execution_error"],
+            "llm_validation": final_attempt["llm_validation"],
+            "results_match_gold": final_attempt["results_match_gold"],
+            "results_feedback": final_attempt["results_feedback"],
+            "generated_results": results if final_attempt["is_valid"] else None,
+            "gold_results": gold_results if gold_valid else None,
             "inference_time": total_time,
             "num_attempts": len(attempts),
             "all_attempts": attempts
@@ -259,28 +489,21 @@ class SpiderEvaluator:
     # Main Evaluation
     # ================================================================
     
-    def evaluate(self, data_path: str, output_dir: str = "results/baseline",
-                num_samples: int = None):
+    def evaluate(self, output_dir: str = "results/baseline", num_samples: int = None):
         """
-        Evaluate all baseline methods on Spider dataset
+        Evaluate all baseline methods on Spider dataset from HuggingFace
         
         Args:
-            data_path: Path to Spider JSONL file
             output_dir: Where to save results
             num_samples: Number of samples to evaluate (None = all)
         """
         
         print(f"\n{'='*60}")
-        print("Baseline Evaluation on Spider Dataset")
+        print("Baseline Evaluation on Spider Dataset (vLLM)")
         print(f"{'='*60}\n")
         
-        # Load data
-        print(f"Loading data from: {data_path}")
-        with open(data_path) as f:
-            data = [json.loads(line) for line in f]
-        
-        if num_samples:
-            data = data[:num_samples]
+        # Load data from HuggingFace
+        data = self.load_dataset_from_hf(num_samples=num_samples)
         
         print(f"Evaluating on {len(data)} examples\n")
         
@@ -305,11 +528,13 @@ class SpiderEvaluator:
                 db_id = item.get("db_id", "")
                 gold_sql = item.get("query", item.get("sql", ""))
                 
-                # Get actual schema from tables.json
-                schema = self.schemas.get(db_id, f"Database: {db_id}")
+                # Get actual schema from tables.json or use provided context
+                schema = self.schemas.get(db_id, item.get("context", f"Database: {db_id}"))
                 
                 # Database path
-                db_path = f"nl2sql_data/database/spider_data/database/{db_id}/{db_id}.sqlite"
+                db_path = f"database/spider_data/database/{db_id}/{db_id}.sqlite"
+
+                assert os.path.exists(db_path), f"Database does not exist at {db_path}"
                 
                 try:
                     if method_name == "zero_shot":
@@ -318,8 +543,8 @@ class SpiderEvaluator:
                         # Use previous examples as few-shot examples
                         examples = data[max(0, i-5):i] if i > 0 else data[1:4]
                         result = self.few_shot(question, schema, db_path, examples)
-                    else:  # self_correction
-                        result = self.self_correction(question, schema, db_path)
+                    else:  # self_correction with semantic feedback
+                        result = self.self_correction(question, schema, db_path, gold_sql)
                     
                     result["question"] = question
                     result["gold_sql"] = gold_sql
@@ -327,7 +552,7 @@ class SpiderEvaluator:
                     results[method_name].append(result)
                     
                 except Exception as e:
-                    print(f"\n⚠️ Error on example {i}: {e}")
+                    print(f"\nError on example {i}: {e}")
                     results[method_name].append({
                         "method": method_name,
                         "question": question,
@@ -353,7 +578,7 @@ class SpiderEvaluator:
             with open(filepath, "w") as f:
                 for item in data:
                     f.write(json.dumps(item) + "\n")
-            print(f"\n✓ Saved {method} results to: {filepath}")
+            print(f"\nSaved {method} results to: {filepath}")
     
     def _generate_report(self, results: Dict, output_dir: str):
         """Generate comparison report"""
@@ -363,7 +588,8 @@ class SpiderEvaluator:
         print(f"{'='*60}\n")
         
         report = "# Baseline Evaluation Results\n\n"
-        report += f"Model: {self.model_name}\n\n"
+        report += f"Model: {self.model_name}\n"
+        report += f"Dataset: Spider Dev (HuggingFace: AsadIsmail/nl2sql-deduplicated)\n\n"
         report += "## Summary\n\n"
         report += "| Method | Valid SQL % | Avg Time (s) | Avg Attempts |\n"
         report += "|--------|-------------|--------------|-------------|\n"
@@ -380,13 +606,25 @@ class SpiderEvaluator:
             print(f"  Valid SQL: {valid_count}/{len(data)} ({valid_pct:.1f}%)")
             print(f"  Avg time: {avg_time:.2f}s")
             print(f"  Avg attempts: {avg_attempts:.1f}")
+            
+            # Additional metrics for self-correction
+            if method == "self_correction":
+                results_match_count = sum(1 for r in data if r.get("results_match_gold", False))
+                results_match_pct = 100 * results_match_count / len(data) if data else 0
+                print(f"  Results match gold: {results_match_count}/{len(data)} ({results_match_pct:.1f}%)")
             print()
         
         report += "\n## Notes\n\n"
         report += "- **Zero-shot**: Single generation attempt\n"
-        report += "- **Few-shot**: Uses 2 examples from training set\n"
-        report += "- **Self-correction**: Up to 3 attempts with error feedback\n\n"
-        report += "Valid SQL = Query executed without errors (not necessarily correct results)\n"
+        report += "- **Few-shot**: Uses 2 examples from dataset\n"
+        report += "- **Self-correction**: Up to 3 attempts to fix execution errors\n\n"
+        report += "Valid SQL = Query executed without errors\n\n"
+        report += "### Self-Correction Process\n\n"
+        report += "The self-correction method includes:\n"
+        report += "1. **Execution error fixing**: Up to 3 attempts to generate valid SQL\n"
+        report += "2. **LLM validation**: Ask LLM if the query correctly answers the question\n"
+        report += "3. **Result comparison**: Compare execution results with gold standard\n\n"
+        report += "This provides both syntactic correctness and semantic validation.\n"
         
         # Save report
         report_path = Path(output_dir) / "evaluation_report.md"
@@ -394,16 +632,16 @@ class SpiderEvaluator:
             f.write(report)
         
         print(f"{'='*60}")
-        print(f"✓ Report saved to: {report_path}")
+        print(f"Report saved to: {report_path}")
         print(f"{'='*60}\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Baseline Evaluation on Spider")
+    parser = argparse.ArgumentParser(description="Baseline Evaluation on Spider (vLLM)")
     parser.add_argument("--model", type=str, default="codellama/CodeLlama-7b-hf",
-                       help="Model to evaluate")
-    parser.add_argument("--data", type=str, default="nl2sql_data/eval/spider_dev.jsonl",
-                       help="Path to Spider dataset")
+                       help="Model name (must match vLLM server)")
+    parser.add_argument("--vllm-url", type=str, default="http://localhost:8000/v1",
+                       help="vLLM server URL")
     parser.add_argument("--output", type=str, default="results/baseline",
                        help="Output directory for results")
     parser.add_argument("--num-samples", type=int, default=None,
@@ -411,27 +649,24 @@ def main():
     
     args = parser.parse_args()
     
-    # Check if data exists
-    if not os.path.exists(args.data):
-        print(f"❌ Data file not found: {args.data}")
-        print("\nPlease download Spider dataset first:")
-        print("  python src/nl2sql/data/download_all_datasets.py")
-        return
+    print("\n" + "="*60)
+    print("BASELINE EVALUATION WITH vLLM")
+    print("="*60)
+    print(f"\nMake sure vLLM server is running:")
+    print(f"  vllm serve {args.model} --host 0.0.0.0 --port 8000")
+    print(f"\nConnecting to: {args.vllm_url}")
+    print(f"Model: {args.model}")
+    print("="*60 + "\n")
     
     # Run evaluation
-    evaluator = SpiderEvaluator(model_name=args.model)
+    evaluator = SpiderEvaluator(model_name=args.model, vllm_url=args.vllm_url)
     results = evaluator.evaluate(
-        data_path=args.data,
         output_dir=args.output,
         num_samples=args.num_samples
     )
     
-    print("\n✅ Baseline evaluation complete!")
+    print("\nBaseline evaluation complete!")
     print(f"\nResults saved to: {args.output}/")
-    print("\nNext steps:")
-    print("  1. Review results in results/baseline/")
-    print("  2. Train your model: python src/nl2sql/train/train_curriculum_lora.py")
-    print("  3. Compare with baselines")
 
 
 if __name__ == "__main__":

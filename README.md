@@ -47,6 +47,19 @@ python push_to_hf.py
 ### Run Baseline Evaluation
 
 ```bash
+
+
+
+vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --quantization awq \
+    --gpu-memory-utilization 0.7 \
+    --max-model-len 2048
+
+
+or if gpu mempry is not too low use codellama/CodeLlama-7b-hf
+
 # Evaluate 3 baseline approaches on Spider dev set
 python src/nl2sql/eval/baseline.py --num-samples 100
 

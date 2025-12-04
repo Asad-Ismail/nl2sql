@@ -210,3 +210,4 @@ __marimo__/
 nl2sql_data/
 wandb/
 unsloth_compiled_cache/
+database/
