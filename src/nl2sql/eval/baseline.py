@@ -11,6 +11,7 @@ Key improvements:
 - Uses HuggingFace datasets instead of local files
 - LLM-based semantic validation (asks if SQL answers the question)
 - Compares execution results with gold standard
+- Shows intermediate results during evaluation
 - Simpler and more reliable than SQL parsing
 
 Requirements:
@@ -71,24 +72,52 @@ Answer:"""
         """
         Compare generated results with gold standard results
         
+        Handles:
+        - Row order independence
+        - Column order independence (within rows)
+        - Type normalization (int vs float, string representations)
+        
         Returns:
             (matches, feedback)
         """
         if generated_results is None or gold_results is None:
             return False, "Cannot compare - one or both queries failed to execute"
         
-        # Convert to sets for comparison (order-independent)
-        gen_set = set(tuple(row) if isinstance(row, (list, tuple)) else (row,) for row in generated_results)
-        gold_set = set(tuple(row) if isinstance(row, (list, tuple)) else (row,) for row in gold_results)
+        # Normalize a single value (handle type differences)
+        def normalize_value(val):
+            if val is None:
+                return None
+            # Convert to string and strip for comparison
+            # This handles int vs float (1 vs 1.0) and string representations
+            return str(val).strip()
         
+        # Normalize and sort each row to handle column order differences
+        def normalize_row(row):
+            if isinstance(row, (list, tuple)):
+                # Sort values within the row (column order independent)
+                normalized = tuple(sorted(normalize_value(v) for v in row))
+            else:
+                # Single value row
+                normalized = (normalize_value(row),)
+            return normalized
+        
+        # Convert to sets for row-order-independent comparison
+        try:
+            gen_set = set(normalize_row(row) for row in generated_results)
+            gold_set = set(normalize_row(row) for row in gold_results)
+        except Exception as e:
+            return False, f"Error normalizing results: {str(e)}"
+        
+        # Check for exact match
         if gen_set == gold_set:
             return True, "Results match gold standard"
         
-        # Provide feedback on differences
+        # Provide detailed feedback on differences
         if len(gen_set) != len(gold_set):
             return False, f"Result count mismatch: generated {len(gen_set)} rows, expected {len(gold_set)} rows"
         
-        return False, "Results differ from gold standard"
+        # Same number of rows but different content
+        return False, "Results differ from gold standard (same row count, different values)"
 
 
 class SpiderEvaluator:
@@ -288,11 +317,34 @@ class SpiderEvaluator:
         except Exception as e:
             return False, str(e), None
     
+    def _print_comparison(self, idx: int, question: str, gen_sql: str, gold_sql: str, 
+                         gen_results, gold_results, results_match: bool, is_valid: bool):
+        """Print intermediate comparison results"""
+        print(f"\n{'='*70}")
+        print(f"Example {idx + 1}")
+        print(f"{'='*70}")
+        print(f"Question: {question[:100]}...")
+        print(f"\nGenerated SQL:\n  {gen_sql[:150]}...")
+        print(f"\nGold SQL:\n  {gold_sql[:150]}...")
+        
+        if is_valid:
+            print(f"\n✅ Generated SQL executed successfully")
+            print(f"Generated Results: {gen_results[:3] if len(gen_results) > 3 else gen_results}{'...' if len(gen_results) > 3 else ''}")
+            print(f"Gold Results:      {gold_results[:3] if gold_results and len(gold_results) > 3 else gold_results}{'...' if gold_results and len(gold_results) > 3 else ''}")
+            
+            if results_match:
+                print(f"🎯 MATCH: Results are identical!")
+            else:
+                print(f"❌ MISMATCH: Results differ")
+        else:
+            print(f"\n❌ Generated SQL failed to execute")
+        print(f"{'='*70}\n")
+    
     # ================================================================
     # Baseline 1: Zero-shot
     # ================================================================
     
-    def zero_shot(self, question: str, schema: str, db_path: str) -> Dict:
+    def zero_shot(self, question: str, schema: str, db_path: str, gold_sql: str = None) -> Dict:
         """Baseline 1: Single LLM call without examples"""
         
         prompt = f"""-- Database Schema
@@ -306,7 +358,16 @@ class SpiderEvaluator:
         sql = self.generate_sql(prompt, max_new_tokens=150)
         inference_time = time.time() - start_time
         
+        # Execute generated SQL
         is_valid, error, results = self.execute_sql(sql, db_path)
+        
+        # Execute gold SQL for comparison
+        gold_results = None
+        results_match = False
+        if gold_sql:
+            gold_valid, gold_error, gold_results = self.execute_sql(gold_sql, db_path)
+            if is_valid and gold_valid:
+                results_match, _ = self.semantic_validator.compare_results(results, gold_results)
         
         return {
             "method": "zero_shot",
@@ -314,6 +375,8 @@ class SpiderEvaluator:
             "is_valid": is_valid,
             "error": error,
             "results": results if is_valid else None,
+            "gold_results": gold_results,
+            "results_match": results_match,
             "inference_time": inference_time,
             "num_attempts": 1
         }
@@ -323,7 +386,7 @@ class SpiderEvaluator:
     # ================================================================
     
     def few_shot(self, question: str, schema: str, db_path: str, 
-                 examples: List[Dict]) -> Dict:
+                 examples: List[Dict], gold_sql: str = None) -> Dict:
         """Baseline 2: Few-shot with similar examples"""
         
         prompt = "-- Examples of natural language to SQL:\n\n"
@@ -344,7 +407,16 @@ class SpiderEvaluator:
         sql = self.generate_sql(prompt, max_new_tokens=150)
         inference_time = time.time() - start_time
         
+        # Execute generated SQL
         is_valid, error, results = self.execute_sql(sql, db_path)
+        
+        # Execute gold SQL for comparison
+        gold_results = None
+        results_match = False
+        if gold_sql:
+            gold_valid, gold_error, gold_results = self.execute_sql(gold_sql, db_path)
+            if is_valid and gold_valid:
+                results_match, _ = self.semantic_validator.compare_results(results, gold_results)
         
         return {
             "method": "few_shot",
@@ -352,6 +424,8 @@ class SpiderEvaluator:
             "is_valid": is_valid,
             "error": error,
             "results": results if is_valid else None,
+            "gold_results": gold_results,
+            "results_match": results_match,
             "inference_time": inference_time,
             "num_attempts": 1
         }
@@ -480,6 +554,7 @@ class SpiderEvaluator:
             "results_feedback": final_attempt["results_feedback"],
             "generated_results": results if final_attempt["is_valid"] else None,
             "gold_results": gold_results if gold_valid else None,
+            "results_match": final_attempt["results_match_gold"],  # Add for consistency
             "inference_time": total_time,
             "num_attempts": len(attempts),
             "all_attempts": attempts
@@ -489,13 +564,15 @@ class SpiderEvaluator:
     # Main Evaluation
     # ================================================================
     
-    def evaluate(self, output_dir: str = "results/baseline", num_samples: int = None):
+    def evaluate(self, output_dir: str = "results/baseline", num_samples: int = None,
+                 print_every: int = 10):
         """
         Evaluate all baseline methods on Spider dataset from HuggingFace
         
         Args:
             output_dir: Where to save results
             num_samples: Number of samples to evaluate (None = all)
+            print_every: Print intermediate results every N examples
         """
         
         print(f"\n{'='*60}")
@@ -506,6 +583,7 @@ class SpiderEvaluator:
         data = self.load_dataset_from_hf(num_samples=num_samples)
         
         print(f"Evaluating on {len(data)} examples\n")
+        print(f"📊 Printing intermediate results every {print_every} examples\n")
         
         # Load model
         self.load_model()
@@ -515,6 +593,13 @@ class SpiderEvaluator:
             "zero_shot": [],
             "few_shot": [],
             "self_correction": []
+        }
+        
+        # Running statistics
+        stats = {
+            "zero_shot": {"valid": 0, "matched": 0, "total": 0},
+            "few_shot": {"valid": 0, "matched": 0, "total": 0},
+            "self_correction": {"valid": 0, "matched": 0, "total": 0}
         }
         
         # Evaluate each method
@@ -534,15 +619,17 @@ class SpiderEvaluator:
                 # Database path
                 db_path = f"database/spider_data/database/{db_id}/{db_id}.sqlite"
 
-                assert os.path.exists(db_path), f"Database does not exist at {db_path}"
+                if not os.path.exists(db_path):
+                    print(f"\n⚠️  Warning: Database does not exist at {db_path}")
+                    continue
                 
                 try:
                     if method_name == "zero_shot":
-                        result = self.zero_shot(question, schema, db_path)
+                        result = self.zero_shot(question, schema, db_path, gold_sql)
                     elif method_name == "few_shot":
                         # Use previous examples as few-shot examples
                         examples = data[max(0, i-5):i] if i > 0 else data[1:4]
-                        result = self.few_shot(question, schema, db_path, examples)
+                        result = self.few_shot(question, schema, db_path, examples, gold_sql)
                     else:  # self_correction with semantic feedback
                         result = self.self_correction(question, schema, db_path, gold_sql)
                     
@@ -551,15 +638,38 @@ class SpiderEvaluator:
                     result["db_id"] = db_id
                     results[method_name].append(result)
                     
+                    # Update stats
+                    stats[method_name]["total"] += 1
+                    if result.get("is_valid", False):
+                        stats[method_name]["valid"] += 1
+                    if result.get("results_match", False):
+                        stats[method_name]["matched"] += 1
+                    
+                    # Print intermediate results
+                    if (i + 1) % print_every == 0:
+                        self._print_comparison(
+                            i, question, result["sql"], gold_sql,
+                            result.get("results"), result.get("gold_results"),
+                            result.get("results_match", False), result.get("is_valid", False)
+                        )
+                        
+                        # Print running statistics
+                        s = stats[method_name]
+                        print(f"📈 Running Stats ({method_name}) after {s['total']} examples:")
+                        print(f"   Valid SQL: {s['valid']}/{s['total']} ({100*s['valid']/s['total']:.1f}%)")
+                        print(f"   Results Match: {s['matched']}/{s['total']} ({100*s['matched']/s['total']:.1f}%)")
+                        print()
+                    
                 except Exception as e:
-                    print(f"\nError on example {i}: {e}")
+                    print(f"\n❌ Error on example {i}: {e}")
                     results[method_name].append({
                         "method": method_name,
                         "question": question,
                         "gold_sql": gold_sql,
                         "db_id": db_id,
                         "error": str(e),
-                        "is_valid": False
+                        "is_valid": False,
+                        "results_match": False
                     })
         
         # Save results and generate report
@@ -578,7 +688,7 @@ class SpiderEvaluator:
             with open(filepath, "w") as f:
                 for item in data:
                     f.write(json.dumps(item) + "\n")
-            print(f"\nSaved {method} results to: {filepath}")
+            print(f"\n✅ Saved {method} results to: {filepath}")
     
     def _generate_report(self, results: Dict, output_dir: str):
         """Generate comparison report"""
@@ -591,34 +701,34 @@ class SpiderEvaluator:
         report += f"Model: {self.model_name}\n"
         report += f"Dataset: Spider Dev (HuggingFace: AsadIsmail/nl2sql-deduplicated)\n\n"
         report += "## Summary\n\n"
-        report += "| Method | Valid SQL % | Avg Time (s) | Avg Attempts |\n"
-        report += "|--------|-------------|--------------|-------------|\n"
+        report += "| Method | Valid SQL % | Results Match % | Avg Time (s) | Avg Attempts |\n"
+        report += "|--------|-------------|-----------------|--------------|-------------|\n"
         
         for method, data in results.items():
             valid_count = sum(1 for r in data if r.get("is_valid", False))
             valid_pct = 100 * valid_count / len(data) if data else 0
+            
+            match_count = sum(1 for r in data if r.get("results_match", False))
+            match_pct = 100 * match_count / len(data) if data else 0
+            
             avg_time = sum(r.get("inference_time", 0) for r in data) / len(data) if data else 0
             avg_attempts = sum(r.get("num_attempts", 1) for r in data) / len(data) if data else 0
             
-            report += f"| {method.replace('_', ' ').title()} | {valid_pct:.1f}% | {avg_time:.2f} | {avg_attempts:.1f} |\n"
+            report += f"| {method.replace('_', ' ').title()} | {valid_pct:.1f}% | {match_pct:.1f}% | {avg_time:.2f} | {avg_attempts:.1f} |\n"
             
             print(f"{method.upper()}")
             print(f"  Valid SQL: {valid_count}/{len(data)} ({valid_pct:.1f}%)")
+            print(f"  Results Match Gold: {match_count}/{len(data)} ({match_pct:.1f}%)")
             print(f"  Avg time: {avg_time:.2f}s")
             print(f"  Avg attempts: {avg_attempts:.1f}")
-            
-            # Additional metrics for self-correction
-            if method == "self_correction":
-                results_match_count = sum(1 for r in data if r.get("results_match_gold", False))
-                results_match_pct = 100 * results_match_count / len(data) if data else 0
-                print(f"  Results match gold: {results_match_count}/{len(data)} ({results_match_pct:.1f}%)")
             print()
         
         report += "\n## Notes\n\n"
         report += "- **Zero-shot**: Single generation attempt\n"
         report += "- **Few-shot**: Uses 2 examples from dataset\n"
         report += "- **Self-correction**: Up to 3 attempts to fix execution errors\n\n"
-        report += "Valid SQL = Query executed without errors\n\n"
+        report += "- **Valid SQL** = Query executed without errors\n"
+        report += "- **Results Match** = Execution results identical to gold standard\n\n"
         report += "### Self-Correction Process\n\n"
         report += "The self-correction method includes:\n"
         report += "1. **Execution error fixing**: Up to 3 attempts to generate valid SQL\n"
@@ -632,7 +742,7 @@ class SpiderEvaluator:
             f.write(report)
         
         print(f"{'='*60}")
-        print(f"Report saved to: {report_path}")
+        print(f"✅ Report saved to: {report_path}")
         print(f"{'='*60}\n")
 
 
@@ -646,6 +756,8 @@ def main():
                        help="Output directory for results")
     parser.add_argument("--num-samples", type=int, default=None,
                        help="Number of samples to evaluate (default: all)")
+    parser.add_argument("--print-every", type=int, default=10,
+                       help="Print intermediate results every N examples (default: 10)")
     
     args = parser.parse_args()
     
@@ -662,10 +774,11 @@ def main():
     evaluator = SpiderEvaluator(model_name=args.model, vllm_url=args.vllm_url)
     results = evaluator.evaluate(
         output_dir=args.output,
-        num_samples=args.num_samples
+        num_samples=args.num_samples,
+        print_every=args.print_every
     )
     
-    print("\nBaseline evaluation complete!")
+    print("\n✅ Baseline evaluation complete!")
     print(f"\nResults saved to: {args.output}/")
 
 
