@@ -211,3 +211,7 @@ nl2sql_data/
 wandb/
 unsloth_compiled_cache/
 database/
+models/*
+!models/tokenizer_config.json
+!models/codellama_chat.jinja
+results/

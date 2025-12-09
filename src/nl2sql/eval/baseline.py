@@ -324,13 +324,26 @@ class SpiderEvaluator:
         print(f"Example {idx + 1}")
         print(f"{'='*70}")
         print(f"Question: {question[:100]}...")
-        print(f"\nGenerated SQL:\n  {gen_sql[:150]}...")
-        print(f"\nGold SQL:\n  {gold_sql[:150]}...")
+        print(f"\nGenerated SQL:\n  {gen_sql[:100]}...")  # Truncate SQL too
+        print(f"{'='*70}")
+        print(f"\nGold SQL:\n  {gold_sql[:100]}...")  # Truncate SQL too
+        print(f"{'='*70}")
         
         if is_valid:
             print(f"\n✅ Generated SQL executed successfully")
-            print(f"Generated Results: {gen_results[:3] if len(gen_results) > 3 else gen_results}{'...' if len(gen_results) > 3 else ''}")
-            print(f"Gold Results:      {gold_results[:3] if gold_results and len(gold_results) > 3 else gold_results}{'...' if gold_results and len(gold_results) > 3 else ''}")
+            
+            # Safe printing with None checks
+            if gen_results and len(gen_results) > 3:
+                print(f"Generated Results: {gen_results[:3]}...")
+            else:
+                print(f"Generated Results: {gen_results}")
+            
+            if gold_results is not None and len(gold_results) > 3:
+                print(f"Gold Results:      {gold_results[:3]}...")
+            elif gold_results is not None:
+                print(f"Gold Results:      {gold_results}")
+            else:
+                print(f"Gold Results:      None (failed to execute)")
             
             if results_match:
                 print(f"🎯 MATCH: Results are identical!")
@@ -433,39 +446,59 @@ class SpiderEvaluator:
     # ================================================================
     # Baseline 3: Self-correction with LLM Validation and Result Comparison
     # ================================================================
-    
+
+
     def self_correction(self, question: str, schema: str, db_path: str,
-                       gold_sql: str, max_attempts: int = 3) -> Dict:
+                   gold_sql: str, max_attempts: int = 3) -> Dict:
         """
-        Baseline 3: Iterative improvement with execution fixes and semantic validation
+        Baseline 3: Iterative improvement with LLM semantic validation
         
         Process:
         1. Generate SQL and fix execution errors
         2. Once valid, ask LLM if it correctly answers the question
-        3. If LLM says no, retry with semantic feedback
-        4. Compare results with gold standard
-        5. If results don't match, provide feedback (but don't retry - already at max)
+        3. If LLM says no, retry with LLM feedback
+        4. At the end, compare with gold standard for evaluation only
         
         Total attempts: up to max_attempts (default 3)
-        Each attempt includes: generation → execution → semantic check → result comparison
+        Each attempt includes: generation → execution → LLM validation → retry if needed
         """
         
         attempts = []
         total_start = time.time()
         
-        # Execute gold SQL once to get expected results
+        # Execute gold SQL once for final evaluation (not used in feedback loop)
         gold_valid, gold_error, gold_results = self.execute_sql(gold_sql, db_path)
+        
+        # Track the best attempt based on LLM validation
+        best_attempt = None
+        best_results = None
         
         prompt = f"""-- Database Schema
 {schema}
 
 -- Question: {question}
--- Generate a valid SQL query:
+-- SQL:
 """
         
         for attempt_num in range(max_attempts):
             # Generate SQL
-            sql = self.generate_sql(prompt, max_new_tokens=150)
+            sql = self.generate_sql(prompt, max_new_tokens=1024)
+            ## handle empty sql
+            if not sql or not sql.strip():
+                attempt_record = {
+                    "attempt_number": attempt_num + 1,
+                    "sql": sql,
+                    "is_valid": False,
+                    "execution_error": "Generated SQL is empty",
+                    "llm_validation": None,
+                }
+                attempts.append(attempt_record)
+                
+                # Add feedback for next attempt
+                prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
+                prompt += f"\n-- Error: Generated empty SQL"
+                prompt += f"\n-- Please generate a valid SQL query:\n-- SQL:\n"
+                continue
             
             # Try to execute
             is_valid, error, results = self.execute_sql(sql, db_path)
@@ -477,13 +510,10 @@ class SpiderEvaluator:
                 "is_valid": is_valid,
                 "execution_error": error,
                 "llm_validation": None,
-                "results_match_gold": False,
-                "results_feedback": None
             }
             
             # If execution failed, add error feedback and continue to next attempt
             if not is_valid:
-                attempt_record["results_feedback"] = "Query failed to execute"
                 attempts.append(attempt_record)
                 
                 # Add execution error feedback for next attempt
@@ -493,68 +523,65 @@ class SpiderEvaluator:
                 prompt += f"\n-- Fix the error and try again:\n"
                 continue
             
-            # Execution succeeded - now do semantic validation
+            # Execution succeeded - now do LLM semantic validation
             llm_validation = self.semantic_validator.ask_llm_validation(
                 question, sql, schema
             )
             attempt_record["llm_validation"] = llm_validation
             
-            # Compare results with gold standard
-            if gold_valid:
-                results_match, results_feedback = self.semantic_validator.compare_results(
-                    results, gold_results
-                )
-                attempt_record["results_match_gold"] = results_match
-                attempt_record["results_feedback"] = results_feedback
-            else:
-                attempt_record["results_feedback"] = "Cannot compare - gold query failed"
-            
             attempts.append(attempt_record)
             
-            # Check if we got it right (LLM says yes AND results match)
-            # LLM validation starts with "Yes" or "yes" if correct
+            # Update best attempt if this is the first valid one or LLM says it's correct
             llm_says_correct = llm_validation and llm_validation.lower().startswith('yes')
             
-            if llm_says_correct and results_match:
-                # Perfect! SQL is correct both semantically and in results
+            if best_attempt is None or llm_says_correct:
+                best_attempt = attempt_record
+                best_results = results
+            
+            # If LLM says it's correct, we're done
+            if llm_says_correct:
                 break
             
             # If this is the last attempt, we're done (no more retries)
             if attempt_num >= max_attempts - 1:
                 break
-            
-            # Build feedback for next attempt
-            feedback_parts = []
-            
-            if not llm_says_correct:
-                feedback_parts.append(f"LLM validation: {llm_validation}")
-            
-            if not results_match:
-                feedback_parts.append(f"Result comparison: {results_feedback}")
-            
-            combined_feedback = "\n".join(feedback_parts)
-            
-            # Add feedback for next attempt
+
+            # LLM says it's not correct - add feedback for next attempt
             prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
             prompt += f"\n-- SQL: {sql}"
-            prompt += f"\n-- Feedback: {combined_feedback}"
-            prompt += f"\n-- Improve the SQL query:\n"
+            prompt += f"\n-- LLM Feedback: {llm_validation[:200]}..."
+            prompt += f"\n\n-- Generate improved SQL:"
+            prompt += f"\n-- SQL:"  # Clear signal to generate here
         
-        # Get final attempt results
-        final_attempt = attempts[-1]
+        # Use best attempt for final results (fallback to last if no valid attempts)
+        final_attempt = best_attempt if best_attempt else attempts[-1]
+        final_results = best_results
         total_time = time.time() - total_start
+
+        print(attempts)
+        # NOW compare with gold results for evaluation purposes only
+        results_match_gold = False
+        results_feedback = None
+        if final_attempt["is_valid"] and gold_valid and final_results is not None:
+            results_match_gold, results_feedback = self.semantic_validator.compare_results(
+                final_results, gold_results
+            )
+        elif not final_attempt["is_valid"]:
+            results_feedback = "Query failed to execute"
+        elif not gold_valid:
+            results_feedback = "Cannot compare - gold query failed"
         
         return {
             "method": "self_correction",
             "sql": final_attempt["sql"],
             "is_valid": final_attempt["is_valid"],
-            "error": final_attempt["execution_error"],
-            "llm_validation": final_attempt["llm_validation"],
-            "results_match_gold": final_attempt["results_match_gold"],
-            "results_feedback": final_attempt["results_feedback"],
-            "generated_results": results if final_attempt["is_valid"] else None,
+            "error": final_attempt.get("execution_error"),
+            "llm_validation": final_attempt.get("llm_validation"),
+            "results_match_gold": results_match_gold,  # Evaluation metric only
+            "results_feedback": results_feedback,      # Evaluation metric only
+            "results": final_results,
             "gold_results": gold_results if gold_valid else None,
-            "results_match": final_attempt["results_match_gold"],  # Add for consistency
+            "results_match": results_match_gold,  # For consistency with other methods
             "inference_time": total_time,
             "num_attempts": len(attempts),
             "all_attempts": attempts
@@ -603,7 +630,7 @@ class SpiderEvaluator:
         }
         
         # Evaluate each method
-        for method_name in ["zero_shot", "few_shot", "self_correction"]:
+        for method_name in ["self_correction"]:
             print(f"\n{'='*60}")
             print(f"Method: {method_name.upper().replace('_', ' ')}")
             print(f"{'='*60}\n")
@@ -756,7 +783,7 @@ def main():
                        help="Output directory for results")
     parser.add_argument("--num-samples", type=int, default=None,
                        help="Number of samples to evaluate (default: all)")
-    parser.add_argument("--print-every", type=int, default=10,
+    parser.add_argument("--print-every", type=int, default=1,
                        help="Print intermediate results every N examples (default: 10)")
     
     args = parser.parse_args()

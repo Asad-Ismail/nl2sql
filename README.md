@@ -48,7 +48,7 @@ python push_to_hf.py
 
 ```bash
 
-
+vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ     --host 0.0.0.0     --port 8000     --quantization awq     --gpu-memory-utilization 0.4     --max-model-len 2048    --chat-template models/codellama_chat.jinja
 
 vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
     --host 0.0.0.0 \
