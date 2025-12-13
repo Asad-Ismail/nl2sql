@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from dspy.teleprompt import BootstrapFewShotWithRandomSearch
 from datasets import load_dataset
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ lm = dspy.LM(
     model="openai/TheBloke/CodeLlama-7B-Instruct-AWQ",
     api_base="http://localhost:8000/v1",
     api_key="dummy",
-    max_tokens=256,
+    max_tokens=1024,
     temperature=0.0
 )
 dspy.configure(lm=lm)
@@ -103,19 +104,6 @@ def metric(example, prediction, trace=None):
     if pred_sql.startswith("]]"):
         pred_sql = pred_sql[2:].strip()
     pred_sql = pred_sql.lstrip('\n').strip()
-
-    print("Question")
-    print(f"*"*100)
-    print(f"{example.question}")
-    print(f"*"*100)
-    print("GT")
-    print(f"{example.sql}")
-    print(f"*"*100)
-    print("Prediction")
-    print(f"*"*100)
-    print(f"{pred_sql}")
-    print(f"*"*100)
-    
     # Execute both queries
     db_path = f"database/spider_data/database/{example.db_id}/{example.db_id}.sqlite"
     
@@ -132,6 +120,7 @@ def metric(example, prediction, trace=None):
         return 1.0
     else:
         print("❌ Mismatch")
+        #print(f"GT Results: {gold_results}, Predicted Results {pred_results}")
         return 0.0
 
 # ==============================================================================
@@ -188,7 +177,7 @@ def load_data():
 def evaluate(module, devset):
     """Evaluate module on devset and return average score"""
     scores = []
-    for example in devset:
+    for example in tqdm(devset,total=len(devset)):
         prediction = module(db_schema=example.db_schema, question=example.question)
         score = metric(example, prediction)
         scores.append(score)
@@ -220,7 +209,7 @@ def main():
         max_bootstrapped_demos=1,
         max_labeled_demos=1,
         max_rounds=1,
-        num_candidate_programs=10
+        num_candidate_programs=5
     )
     
     compiled = optimizer.compile(SQLModule(), trainset=trainset, valset=valset)

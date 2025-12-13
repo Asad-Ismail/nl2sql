@@ -215,3 +215,4 @@ models/*
 !models/tokenizer_config.json
 !models/codellama_chat.jinja
 results/
+*.txt

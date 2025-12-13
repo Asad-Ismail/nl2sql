@@ -47,17 +47,7 @@ echo ""
 # ============================================================================
 # Run Training with Dual Logging
 # ============================================================================
-# Using 'tee' to write to both terminal and file
-# '2>&1' redirects stderr to stdout so both are captured
-# 'unbuffer' or 'stdbuf' ensures real-time output (not buffered)
-
-# Option 1: Basic (may have buffering delays)
-# python ${SCRIPT_NAME} 2>&1 | tee ${LOG_FILE}
-
-# Option 2: Unbuffered output (recommended - requires 'expect' package)
-# unbuffer python ${SCRIPT_NAME} 2>&1 | tee ${LOG_FILE}
-
-# Option 3: Using stdbuf (usually pre-installed)
+# Using stdbuf (usually pre-installed)
 stdbuf -oL -eL python ${SCRIPT_NAME} 2>&1 | tee ${LOG_FILE}
 
 # Capture exit code
