@@ -106,14 +106,14 @@ def metric(example, prediction, trace=None):
 
     print("Question")
     print(f"*"*100)
-    print(f"\n❔ {example.question}")
+    print(f"{example.question}")
     print(f"*"*100)
     print("GT")
     print(f"{example.sql}")
     print(f"*"*100)
     print("Prediction")
     print(f"*"*100)
-    print(f"🤖 {pred_sql}")
+    print(f"{pred_sql}")
     print(f"*"*100)
     
     # Execute both queries
@@ -137,30 +137,53 @@ def metric(example, prediction, trace=None):
 # ==============================================================================
 # Data
 # ==============================================================================
-def load_data():
-    train = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
-    dev = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
-    
-    def convert(dataset, limit):
-        examples = []
-        for i, item in enumerate(dataset.shuffle(seed=42)):
-            if i >= limit:
-                break
-            
-            db_id = item['db_id']
-            # Get REAL schema from tables.json instead of item['context']
-            schema = SCHEMAS.get(db_id, f"Database: {db_id}")
-            
-            examples.append(dspy.Example(
-                db_schema=schema,  # Use real CREATE TABLE schema
-                question=item['question'],
-                sql=item['sql'],
-                db_id=db_id
-            ).with_inputs('db_schema', 'question'))
-        return examples
-    print(f"Using train data of size {len(train)//10} and test on complete dev set {len(dev)}")
-    return convert(train, len(train)//10), convert(dev, len(dev))
 
+
+def convert_to_dspy(dataset_split):
+    """
+    Just converts a dataset list/split to DSPy examples.
+    No shuffling, no limiting. We do that beforehand.
+    """
+    examples = []
+    for item in dataset_split:
+        db_id = item['db_id']
+        schema = SCHEMAS.get(db_id, f"Database: {db_id}")
+        
+        examples.append(dspy.Example(
+            db_schema=schema,
+            question=item['question'],
+            sql=item['sql'],
+            db_id=db_id
+        ).with_inputs('db_schema', 'question'))
+    return examples
+
+
+def load_data():
+    # 1. Load the raw dataset
+    full_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
+    dev_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
+
+    # 2. SHUFFLE ONCE GLOBALLY
+    # This ensures the order is fixed before we start slicing
+    shuffled_data = full_data.shuffle(seed=42)
+
+    # 3. Create disjoint slices using indices
+    # Train: 0 to 2000
+    train_slice = shuffled_data.select(range(0, 2000))
+    
+    # Opt Val: 2000 to 2100 (Guaranteed to be different from 0-2000)
+    val_slice = shuffled_data.select(range(2000, 2100))
+
+    print(f"Split sizes -> Train: {len(train_slice)}, Val: {len(val_slice)}")
+
+    # 4. Convert to DSPy
+    trainset = convert_to_dspy(train_slice)
+    valset = convert_to_dspy(val_slice)
+    devset = convert_to_dspy(dev_data) # Keep dev set full
+
+    return trainset, valset, devset
+
+    
 
 def evaluate(module, devset):
     """Evaluate module on devset and return average score"""
@@ -180,8 +203,8 @@ def main():
     logger.info(f"Loaded {len(SCHEMAS)} database schemas")
     
     logger.info("Loading data...")
-    trainset, devset = load_data()
-    logger.info(f"Loaded {len(trainset)} train, {len(devset)} dev")
+    trainset, valset, devset = load_data()
+    logger.info(f"Loaded {len(trainset)} train, Loaded {len(valset)}, Loaded final test set {len(devset)} ")
     
     # Evaluate baseline (before optimization)
     logger.info("\n" + "="*80)
@@ -194,13 +217,13 @@ def main():
     logger.info("Starting optimization...")
     optimizer = BootstrapFewShotWithRandomSearch(
         metric=metric,
-        max_bootstrapped_demos=2,
-        max_labeled_demos=2,
+        max_bootstrapped_demos=1,
+        max_labeled_demos=1,
         max_rounds=1,
-        num_candidate_programs=3
+        num_candidate_programs=10
     )
     
-    compiled = optimizer.compile(SQLModule(), trainset=trainset, valset=devset)
+    compiled = optimizer.compile(SQLModule(), trainset=trainset, valset=valset)
 
     # Evaluate optimized model (after optimization)
     logger.info("\n" + "="*80)

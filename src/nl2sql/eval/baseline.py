@@ -630,7 +630,7 @@ class SpiderEvaluator:
         }
         
         # Evaluate each method
-        for method_name in ["self_correction"]:
+        for method_name in ["zero_shot","few_shot","self_correction"]:
             print(f"\n{'='*60}")
             print(f"Method: {method_name.upper().replace('_', ' ')}")
             print(f"{'='*60}\n")
