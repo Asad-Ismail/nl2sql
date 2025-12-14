@@ -73,7 +73,7 @@ class FinetunedModelEvaluator:
         # Enable inference mode
         FastLanguageModel.for_inference(self.model)
         
-        print("✓ Model loaded successfully\n")
+        print("Model loaded successfully\n")
     
     def format_prompt(self, schema: str, question: str) -> str:
         """
@@ -321,7 +321,7 @@ class FinetunedModelEvaluator:
                     self._print_comparison(i, result, gen_results, gold_results)
                     
                     # Print running statistics
-                    print(f"📈 Running Stats after {metrics['total']} examples:")
+                    print(f" Running Stats after {metrics['total']} examples:")
                     print(f"   Valid SQL: {metrics['valid']}/{metrics['total']} ({100*metrics['valid']/metrics['total']:.1f}%)")
                     print(f"   Results Match: {metrics['matched']}/{metrics['total']} ({100*metrics['matched']/metrics['total']:.1f}%)")
                     print(f"   Exact Match: {metrics['exact_match']}/{metrics['total']} ({100*metrics['exact_match']/metrics['total']:.1f}%)")
