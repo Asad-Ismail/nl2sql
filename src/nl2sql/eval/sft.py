@@ -32,6 +32,7 @@ from tqdm import tqdm
 import torch
 from datasets import load_dataset
 from unsloth import FastLanguageModel
+from nl2sql.utils.util import load_schemas
 
 
 class SQLExecutor:
@@ -143,43 +144,10 @@ class FinetunedModelEvaluator:
         print(f"\n{'='*60}")
         print(f"Loading Database Schemas from tables.json")
         print(f"{'='*60}\n")
-        self.schemas = self._load_schemas()
-        print(f"✓ Loaded schemas for {len(self.schemas)} databases\n")
-        
+        self.schemas = load_schemas()
+        print(f"✓ Loaded schemas for {len(self.schemas)} databases\n") 
         # Load model
         self._load_model()
-    
-    def _load_schemas(self) -> Dict[str, str]:
-        """Load database schemas from Spider tables.json - SAME AS BASELINE"""
-        schema_file = Path("database/spider_data/tables.json")
-        
-        if not schema_file.exists():
-            print("⚠️  Warning: tables.json not found. Using minimal schema info.")
-            return {}
-        
-        with open(schema_file) as f:
-            tables_data = json.load(f)
-        
-        schemas = {}
-        for db in tables_data:
-            db_id = db['db_id']
-            table_names = db['table_names_original']
-            column_names = db['column_names_original']
-            column_types = db['column_types']
-            
-            # Format schema as CREATE TABLE statements
-            schema_lines = []
-            for table_idx, table_name in enumerate(table_names):
-                cols = [(col[1], column_types[i]) 
-                       for i, col in enumerate(column_names) 
-                       if col[0] == table_idx]
-                if cols:
-                    col_defs = [f"{name} {dtype}" for name, dtype in cols]
-                    schema_lines.append(f"CREATE TABLE {table_name} ({', '.join(col_defs)})")
-            
-            schemas[db_id] = "\n".join(schema_lines)
-        
-        return schemas
     
     def _load_model(self):
         """Load fine-tuned model"""

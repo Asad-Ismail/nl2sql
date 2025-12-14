@@ -36,6 +36,7 @@ from openai import OpenAI
 from tqdm import tqdm
 import time
 from datasets import load_dataset
+from nl2sql.utils.util import load_schemas, execute_sql, print_comparison
 
 
 class SemanticValidator:
@@ -129,7 +130,7 @@ class SpiderEvaluator:
         self.vllm_url = vllm_url
         self.client = None
         self.semantic_validator = None
-        self.schemas = self._load_schemas()
+        self.schemas = load_schemas()
     
     def load_dataset_from_hf(self, num_samples: Optional[int] = None) -> List[Dict]:
         """
@@ -282,13 +283,13 @@ class SpiderEvaluator:
         inference_time = time.time() - start_time
         
         # Execute generated SQL
-        is_valid, error, results = self.execute_sql(sql, db_path)
+        is_valid, error, results = execute_sql(sql, db_path)
         
         # Execute gold SQL for comparison
         gold_results = None
         results_match = False
         if gold_sql:
-            gold_valid, gold_error, gold_results = self.execute_sql(gold_sql, db_path)
+            gold_valid, gold_error, gold_results = execute_sql(gold_sql, db_path)
             if is_valid and gold_valid:
                 results_match, _ = self.semantic_validator.compare_results(results, gold_results)
         
@@ -331,13 +332,13 @@ class SpiderEvaluator:
         inference_time = time.time() - start_time
         
         # Execute generated SQL
-        is_valid, error, results = self.execute_sql(sql, db_path)
+        is_valid, error, results = execute_sql(sql, db_path)
         
         # Execute gold SQL for comparison
         gold_results = None
         results_match = False
         if gold_sql:
-            gold_valid, gold_error, gold_results = self.execute_sql(gold_sql, db_path)
+            gold_valid, gold_error, gold_results = execute_sql(gold_sql, db_path)
             if is_valid and gold_valid:
                 results_match, _ = self.semantic_validator.compare_results(results, gold_results)
         
@@ -377,7 +378,7 @@ class SpiderEvaluator:
         total_start = time.time()
         
         # Execute gold SQL once for final evaluation (not used in feedback loop)
-        gold_valid, gold_error, gold_results = self.execute_sql(gold_sql, db_path)
+        gold_valid, gold_error, gold_results = execute_sql(gold_sql, db_path)
         
         # Track the best attempt based on LLM validation
         best_attempt = None
@@ -411,7 +412,7 @@ class SpiderEvaluator:
                 continue
             
             # Try to execute
-            is_valid, error, results = self.execute_sql(sql, db_path)
+            is_valid, error, results = execute_sql(sql, db_path)
             
             # Initialize attempt record
             attempt_record = {
@@ -584,7 +585,7 @@ class SpiderEvaluator:
                     
                     # Print intermediate results
                     if (i + 1) % print_every == 0:
-                        self._print_comparison(
+                        print_comparison(
                             i, question, result["sql"], gold_sql,
                             result.get("results"), result.get("gold_results"),
                             result.get("results_match", False), result.get("is_valid", False)

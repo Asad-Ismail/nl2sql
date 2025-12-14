@@ -10,6 +10,7 @@ from pathlib import Path
 from dspy.teleprompt import BootstrapFewShotWithRandomSearch
 from datasets import load_dataset
 from tqdm import tqdm
+from nl2sql.utils.util import load_schemas,execute_sql,print_comparison
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -82,18 +83,6 @@ class SQLModule(dspy.Module):
 # ==============================================================================
 # Metric
 # ==============================================================================
-def execute_sql(sql: str, db_path: str):
-    if not os.path.exists(db_path):
-        return None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute(sql)
-        results = cursor.fetchall()
-        conn.close()
-        return results
-    except:
-        return None
 
 def metric(example, prediction, trace=None):
     if not hasattr(prediction, 'sql') or not prediction.sql:
@@ -201,19 +190,21 @@ def main():
     logger.info("EVALUATING BASELINE (Before Optimization)")
     logger.info("="*80)
     baseline = SQLModule()
-    baseline_score = evaluate(baseline, devset)
-    logger.info(f"Baseline score is {baseline_score}")
+    #baseline_score = evaluate(baseline, devset)
+    #logger.info(f"Baseline score is {baseline_score}")
     
     logger.info("Starting optimization...")
     optimizer = BootstrapFewShotWithRandomSearch(
         metric=metric,
-        max_bootstrapped_demos=1,
-        max_labeled_demos=1,
-        max_rounds=1,
+        max_bootstrapped_demos=2,
+        max_labeled_demos=2,
+        max_rounds=3,
         num_candidate_programs=5
     )
     
     compiled = optimizer.compile(SQLModule(), trainset=trainset, valset=valset)
+
+    exit()
 
     # Evaluate optimized model (after optimization)
     logger.info("\n" + "="*80)
@@ -225,9 +216,9 @@ def main():
     logger.info("\n" + "="*100)
     logger.info("FINAL RESULTS")
     logger.info("="*100)
-    logger.info(f"📊 Baseline Score (Before):  {baseline_score:.2%} ({baseline_score:.4f})")
+    #logger.info(f"📊 Baseline Score (Before):  {baseline_score:.2%} ({baseline_score:.4f})")
     logger.info(f"📊 Optimized Score (After):  {optimized_score:.2%} ({optimized_score:.4f})")
-    logger.info(f"📈 Improvement:              {(optimized_score - baseline_score):.2%} ({optimized_score - baseline_score:+.4f})")
+    #logger.info(f"📈 Improvement:              {(optimized_score - baseline_score):.2%} ({optimized_score - baseline_score:+.4f})")
     logger.info("="*100)
     
     logger.info("\nSaving optimized model...")

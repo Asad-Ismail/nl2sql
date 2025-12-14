@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+from collections import Counter
 from pathlib import Path
+from typing import Any, Optional, Sequence, Tuple
 
 
-def load_schemas(tabes_path:str="database/spider_data/tables.json"):
+def load_schemas(tables_path:str="database/spider_data/tables.json"):
     """Load database schemas from Spider tables.json"""
     schema_file = Path(tables_path)
     
@@ -54,16 +61,15 @@ def execute_sql(sql: str, db_path: str) -> Tuple[bool, Optional[str], Optional[L
     except Exception as e:
         return False, str(e), None
 
-def print_comparison( idx: int, question: str, gen_sql: str, gold_sql: str, 
-                         gen_results, gold_results, results_match: bool, is_valid: bool):
+def print_comparison( idx: int, question: str, gen_sql: str, gold_sql: str, gen_results, gold_results, results_match: bool, is_valid: bool):
         """Print intermediate comparison results"""
         print(f"\n{'='*70}")
         print(f"Example {idx + 1}")
         print(f"{'='*70}")
-        print(f"Question: {question")
-        print(f"\nGenerated SQL:\n  {gen_sql.")  # Truncate SQL too
+        print(f"Question: {question}")
+        print(f"\nGenerated SQL:\n  {gen_sql}")  
         print(f"{'='*70}")
-        print(f"\nGold SQL:\n  {gold_sql")  # Truncate SQL too
+        print(f"\nGold SQL:\n  {gold_sql}") 
         print(f"{'='*70}")
         
         if is_valid:
@@ -89,3 +95,14 @@ def print_comparison( idx: int, question: str, gen_sql: str, gold_sql: str,
         else:
             print(f"\n❌ Generated SQL failed to execute")
         print(f"{'='*70}\n")
+
+
+SQL_PATTERNS = {
+    'simple_select': r'^\s*SELECT\s+.*\s+FROM\s+\w+\s*;?\s*$',
+    'with_where': r'WHERE',
+    'with_join': r'JOIN',
+    'with_aggregation': r'(COUNT|SUM|AVG|MIN|MAX|GROUP BY)',
+    'with_subquery': r'SELECT.*SELECT',
+    'with_union': r'UNION',
+    'with_order_limit': r'(ORDER BY|LIMIT)',
+}
