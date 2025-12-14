@@ -1,20 +1,11 @@
 """
-Comprehensive Evaluation for Fine-tuned NL2SQL Model on Spider Dataset
-FIXED VERSION - Matches baseline's schema loading approach
-
-Evaluates fine-tuned model with same metrics as baseline:
-- Loads schemas from tables.json (same as baseline)
-- Execution accuracy on real Spider databases
-- Result comparison with gold standard
-- Detailed error analysis
-- Performance by SQL complexity
-
+Run Evaluation of SFT finetune model on sql dataset
 Requirements:
     pip install unsloth datasets tqdm pandas matplotlib seaborn
 
 Usage:
-    python eval_finetuned_model_fixed.py --model models/nl2sql-unsloth/final --num-samples 100
-    python eval_finetuned_model_fixed.py --model models/nl2sql-unsloth/checkpoint-10800 --print-prompts
+    python sft.py --model models/nl2sql-unsloth/final --num-samples 100
+    python sft.py --model models/nl2sql-unsloth/checkpoint-10800 --print-prompts
 """
 
 import os
@@ -47,10 +38,6 @@ from nl2sql.utils.util import (
     generate_markdown_report,
     SQL_PATTERNS
 )
-
-
-# Removed SQLExecutor class and SQL_PATTERNS - now using shared utilities from util.py
-
 
 class FinetunedModelEvaluator:
     """Evaluate fine-tuned NL2SQL model on Spider dataset"""
@@ -109,8 +96,6 @@ class FinetunedModelEvaluator:
         """Generate SQL from natural language"""
         
         prompt = self.format_prompt(schema, question)
-        
-        # 🔥 Print prompt for debugging
         if print_prompt:
             print("\n" + "="*100)
             print("PROMPT SENT TO MODEL:")
@@ -212,7 +197,7 @@ class FinetunedModelEvaluator:
         data = self.load_dataset_from_hf(num_samples=num_samples)
         
         print(f"Evaluating on {len(data)} examples")
-        print(f"📊 Printing intermediate results every {print_every} examples")
+        print(f" Printing intermediate results every {print_every} examples")
         if print_prompts:
             print(f"🔍 Printing ALL prompts sent to model")
         print()
@@ -244,7 +229,7 @@ class FinetunedModelEvaluator:
             schema = self.schemas.get(db_id, item.get("context", f"Database: {db_id}"))
             
             if not schema or schema.startswith("Database:"):
-                print(f"\n⚠️  Warning: No proper schema found for db_id={db_id}, skipping...")
+                print(f"\n⚠️  Warning: No proper schema found  will probably hallucinate for db_id={db_id}, skipping...")
                 continue
             
             # Database path using shared utility
@@ -386,7 +371,7 @@ class FinetunedModelEvaluator:
             }
         )
         
-        print(f"\n✅ Saved results to: {output_dir}/")
+        print(f"\n Saved results to: {output_dir}/")
     
     def _generate_report(self, metrics, complexity_metrics, error_patterns, output_dir):
         """Generate evaluation report - preserves exact output format"""
@@ -455,7 +440,7 @@ def main():
                        help="Output directory for results")
     parser.add_argument("--num-samples", type=int, default=None,
                        help="Number of samples to evaluate (default: all)")
-    parser.add_argument("--print-every", type=int, default=10,
+    parser.add_argument("--print-every", type=int, default=1,
                        help="Print intermediate results every N examples")
     parser.add_argument("--print-prompts", action="store_true",default=True,
                        help="Print all prompts sent to model (for debugging)")
@@ -488,7 +473,7 @@ def main():
         print_prompts=args.print_prompts
     )
     
-    print("\n✅ Evaluation complete!")
+    print("\n FineTune Evaluation complete!")
     print(f"Results saved to: {args.output}/")
 
 

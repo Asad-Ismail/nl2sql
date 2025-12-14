@@ -265,9 +265,9 @@ class UnslothTrainer:
             load_in_4bit=load_in_4bit,
         )
         
-        logger.info(f"✓ Model and tokenizer loaded")
-        logger.info(f"✓ Max sequence length: {max_seq_length}")
-        logger.info(f"✓ 4-bit quantization: {load_in_4bit}")
+        logger.info(f" Model and tokenizer loaded")
+        logger.info(f" Max sequence length: {max_seq_length}")
+        logger.info(f" 4-bit quantization: {load_in_4bit}")
         
         # Register Chat Template for Alpaca format
         self.tokenizer = get_chat_template(
@@ -427,7 +427,7 @@ class UnslothTrainer:
         )
         
         # Apply response-only training - CRITICAL: Must be after SFTTrainer creation
-        logger.info("⚙️  Applying train_on_responses_only...")
+        logger.info(" Applying train_on_responses_only...")
         trainer = train_on_responses_only(
             trainer,
             instruction_part="### Instruction:",

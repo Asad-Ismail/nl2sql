@@ -1,5 +1,5 @@
 """
-DSPy Optimizer for NL2SQL - Simple Version
+DSPy Optimizer for NL2SQL
 """
 import dspy
 import os
@@ -78,17 +78,17 @@ def metric(example, prediction, trace=None):
     pred_success, pred_error, pred_results = execute_sql(pred_sql, db_path)
     
     if not gold_success or not pred_success:
-        print("❌ Execution failed")
+        #print("❌ Execution failed")
         return 0.0
     
     # Compare using shared utility
     results_match, feedback = compare_results(pred_results, gold_results)
     
     if results_match:
-        print("✅ Match!")
+        #print("✅ Match!")
         return 1.0
     else:
-        print("❌ Mismatch")
+        #print("❌ Mismatch")
         return 0.0
 
 # ==============================================================================
@@ -176,29 +176,29 @@ def generate_optimization_report(baseline_results, baseline_metrics, baseline_co
         additional_sections=sections
     )
     
-    logger.info(f"\n✅ Optimization report saved to: {report_path}")
+    logger.info(f"\nOptimization report saved to: {report_path}")
     return report_path
 
 
 def load_data():
-    # 1. Load the raw dataset
+    # Load the raw dataset
     full_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
     dev_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
 
-    # 2. SHUFFLE ONCE GLOBALLY
+    # SHUFFLE ONCE GLOBALLY
     # This ensures the order is fixed before we start slicing
     shuffled_data = full_data.shuffle(seed=42)
 
-    # 3. Create disjoint slices using indices
+    # Create disjoint slices using indices
     # Train: 0 to 2000
-    train_slice = shuffled_data.select(range(0, 2000))
+    train_slice = shuffled_data.select(range(0, 3000))
     
     # Opt Val: 2000 to 2100 (Guaranteed to be different from 0-2000)
-    val_slice = shuffled_data.select(range(2000, 2100))
+    val_slice = shuffled_data.select(range(3000, 5000))
 
     print(f"Split sizes -> Train: {len(train_slice)}, Val: {len(val_slice)}")
 
-    # 4. Convert to DSPy
+    # Convert to DSPy
     trainset = convert_to_dspy(train_slice)
     valset = convert_to_dspy(val_slice)
     devset = convert_to_dspy(dev_data) # Keep dev set full
@@ -322,7 +322,7 @@ def main():
     logger.info("\nSaving optimized model...")
     os.makedirs("models/dspy_optimized", exist_ok=True)
     compiled.save("models/dspy_optimized/nl2sql.json")
-    logger.info("✅ Model saved to: models/dspy_optimized/nl2sql.json")
+    logger.info("Model saved to: models/dspy_optimized/nl2sql.json")
     
     # Generate comprehensive report
     logger.info("\nGenerating optimization report...")
@@ -331,7 +331,7 @@ def main():
         optimized_results, optimized_metrics, optimized_complexity
     )
     
-    logger.info("\n✅ Optimization complete!")
+    logger.info("\n Optimization complete!")
     
 
 if __name__ == "__main__":

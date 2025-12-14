@@ -191,7 +191,7 @@ class SpiderEvaluator:
         # Initialize semantic validator with generate function
         self.semantic_validator = SemanticValidator(self.generate_sql)
         
-        print("✓ Client initialized successfully\n")
+        print("Client initialized successfully\n")
     
     def generate_sql(self, prompt: str, max_new_tokens: int = 256) -> str:
         """Generate SQL from prompt using vLLM via OpenAI API"""
@@ -224,11 +224,14 @@ class SpiderEvaluator:
     def zero_shot(self, question: str, schema: str, db_path: str, gold_sql: str = None) -> Dict:
         """Baseline 1: Single LLM call without examples"""
         
-        prompt = f"""-- Database Schema
+        prompt = f"""### Task: Convert the following natural language question to a SQL query.
+
+### Database Schema:
 {schema}
 
--- Question: {question}
--- SQL:
+### Question: {question}
+
+### SQL Query:
 """
         
         start_time = time.time()
@@ -266,19 +269,20 @@ class SpiderEvaluator:
                  examples: List[Dict], gold_sql: str = None) -> Dict:
         """Baseline 2: Few-shot with similar examples"""
         
-        prompt = "-- Examples of natural language to SQL:\n\n"
+        prompt = "### Task: Convert natural language questions to SQL queries.\n\n"
+        prompt += "### Examples:\n\n"
         
         # Add 2-3 examples
         for i, ex in enumerate(examples[:2], 1):
-            prompt += f"-- Example {i}\n"
-            prompt += f"-- Schema: {ex.get('context', 'N/A')}\n"
-            prompt += f"-- Question: {ex['question']}\n"
-            prompt += f"-- SQL:\n{ex.get('query', ex.get('sql', ''))}\n\n"
+            prompt += f"**Example {i}:**\n"
+            prompt += f"Schema: {ex.get('context', 'N/A')}\n"
+            prompt += f"Question: {ex['question']}\n"
+            prompt += f"SQL: {ex.get('query', ex.get('sql', ''))}\n\n"
         
-        prompt += f"-- Now convert this question:\n"
-        prompt += f"-- Schema:\n{schema}\n"
-        prompt += f"-- Question: {question}\n"
-        prompt += f"-- SQL:\n"
+        prompt += f"### Now convert this question:\n"
+        prompt += f"Schema:\n{schema}\n\n"
+        prompt += f"Question: {question}\n\n"
+        prompt += f"SQL Query:\n"
         
         start_time = time.time()
         sql = self.generate_sql(prompt, max_new_tokens=150)
@@ -337,13 +341,15 @@ class SpiderEvaluator:
         best_attempt = None
         best_results = None
         
-        prompt = f"""-- Database Schema
+        prompt = f"""### Task: Convert the following natural language question to a SQL query.
+
+### Database Schema:
 {schema}
 
--- Question: {question}
--- SQL:
+### Question: {question}
+
+### SQL Query:
 """
-        
         for attempt_num in range(max_attempts):
             # Generate SQL
             sql = self.generate_sql(prompt, max_new_tokens=1024)
@@ -566,7 +572,7 @@ class SpiderEvaluator:
                         
                         # Print running statistics
                         s = stats[method_name]
-                        print(f"📈 Running Stats ({method_name}) after {s['total']} examples:")
+                        print(f" Running Stats ({method_name}) after {s['total']} examples:")
                         print(f"   Valid SQL: {s['valid']}/{s['total']} ({100*s['valid']/s['total']:.1f}%)")
                         print(f"   Results Match: {s['matched']}/{s['total']} ({100*s['matched']/s['total']:.1f}%)")
                         print()
@@ -592,7 +598,7 @@ class SpiderEvaluator:
     def _save_results(self, results: Dict, output_dir: str):
         """Save results to JSONL files using shared utility"""
         save_evaluation_results(results, output_dir)
-        print(f"\n✅ Saved results to: {output_dir}/")
+        print(f"\n Saved results to: {output_dir}/")
     
     def _generate_report(self, results: Dict, output_dir: str, complexity_metrics: Dict):
         """Generate comparison report with complexity breakdown"""
@@ -637,28 +643,11 @@ class SpiderEvaluator:
                         complexity_section += f"**{category.upper().replace('_', ' ')}**: "
                         complexity_section += f"Valid: {stats['valid']}/{stats['total']} ({100*stats['valid']/stats['total']:.1f}%), "
                         complexity_section += f"Match: {stats['matched']}/{stats['total']} ({100*stats['matched']/stats['total']:.1f}%)\n\n"
-        
-        notes = """- **Zero-shot**: Single generation attempt
-- **Few-shot**: Uses 2 examples from dataset
-- **Self-correction**: Up to 3 attempts to fix execution errors
 
-- **Valid SQL** = Query executed without errors
-- **Results Match** = Execution results identical to gold standard
-
-### Self-Correction Process
-
-The self-correction method includes:
-1. **Execution error fixing**: Up to 3 attempts to generate valid SQL
-2. **LLM validation**: Ask LLM if the query correctly answers the question
-3. **Result comparison**: Compare execution results with gold standard
-
-This provides both syntactic correctness and semantic validation."""
-        
         # Generate report using shared utility
         sections = {
             "Summary": summary_table,
             "Performance by SQL Complexity": complexity_section,
-            "Notes": notes
         }
         
         report_path = generate_markdown_report(
@@ -671,13 +660,13 @@ This provides both syntactic correctness and semantic validation."""
         )
         
         print(f"{'='*60}")
-        print(f"✅ Report saved to: {report_path}")
+        print(f" Report saved to: {report_path}")
         print(f"{'='*60}\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Baseline Evaluation on Spider (vLLM)")
-    parser.add_argument("--model", type=str, default="codellama/CodeLlama-7b-hf",
+    parser.add_argument("--model", type=str, default="TheBloke/CodeLlama-7B-Instruct-AWQ",
                        help="Model name (must match vLLM server)")
     parser.add_argument("--vllm-url", type=str, default="http://localhost:8000/v1",
                        help="vLLM server URL")
@@ -707,7 +696,7 @@ def main():
         print_every=args.print_every
     )
     
-    print("\n✅ Baseline evaluation complete!")
+    print("\n Baseline evaluation complete!")
     print(f"\nResults saved to: {args.output}/")
 
 
