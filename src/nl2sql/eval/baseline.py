@@ -36,7 +36,19 @@ from openai import OpenAI
 from tqdm import tqdm
 import time
 from datasets import load_dataset
-from nl2sql.utils.util import load_schemas, execute_sql, print_comparison
+from nl2sql.utils.util import (
+    load_schemas,
+    execute_sql,
+    print_comparison,
+    compare_results,
+    calculate_metrics,
+    print_metrics,
+    extract_sql_from_text,
+    categorize_sql_complexity,
+    get_db_path,
+    save_evaluation_results,
+    generate_markdown_report
+)
 
 
 class SemanticValidator:
@@ -70,55 +82,8 @@ Answer:"""
     
     @staticmethod
     def compare_results(generated_results: List, gold_results: List) -> Tuple[bool, str]:
-        """
-        Compare generated results with gold standard results
-        
-        Handles:
-        - Row order independence
-        - Column order independence (within rows)
-        - Type normalization (int vs float, string representations)
-        
-        Returns:
-            (matches, feedback)
-        """
-        if generated_results is None or gold_results is None:
-            return False, "Cannot compare - one or both queries failed to execute"
-        
-        # Normalize a single value (handle type differences)
-        def normalize_value(val):
-            if val is None:
-                return None
-            # Convert to string and strip for comparison
-            # This handles int vs float (1 vs 1.0) and string representations
-            return str(val).strip()
-        
-        # Normalize and sort each row to handle column order differences
-        def normalize_row(row):
-            if isinstance(row, (list, tuple)):
-                # Sort values within the row (column order independent)
-                normalized = tuple(sorted(normalize_value(v) for v in row))
-            else:
-                # Single value row
-                normalized = (normalize_value(row),)
-            return normalized
-        
-        # Convert to sets for row-order-independent comparison
-        try:
-            gen_set = set(normalize_row(row) for row in generated_results)
-            gold_set = set(normalize_row(row) for row in gold_results)
-        except Exception as e:
-            return False, f"Error normalizing results: {str(e)}"
-        
-        # Check for exact match
-        if gen_set == gold_set:
-            return True, "Results match gold standard"
-        
-        # Provide detailed feedback on differences
-        if len(gen_set) != len(gold_set):
-            return False, f"Result count mismatch: generated {len(gen_set)} rows, expected {len(gold_set)} rows"
-        
-        # Same number of rows but different content
-        return False, "Results differ from gold standard (same row count, different values)"
+        """Use shared compare_results function from utils"""
+        return compare_results(generated_results, gold_results)
 
 
 class SpiderEvaluator:
@@ -249,20 +214,8 @@ class SpiderEvaluator:
             return ""
     
     def _extract_sql(self, text: str) -> str:
-        """Extract SQL query from generated text"""
-        # Look for SELECT statement
-        text_upper = text.upper()
-        if "SELECT" in text_upper:
-            start = text_upper.find("SELECT")
-            sql = text[start:]
-            # Stop at common delimiters
-            for delimiter in ["\n\n", "###", "Question:", "Schema:"]:
-                if delimiter in sql:
-                    sql = sql[:sql.find(delimiter)]
-            # Remove trailing semicolon if present
-            sql = sql.rstrip(';').strip()
-            return sql
-        return text.strip()
+        """Extract SQL query from generated text using shared utility"""
+        return extract_sql_from_text(text)
     
     # ================================================================
     # Baseline 1: Zero-shot
@@ -540,6 +493,14 @@ class SpiderEvaluator:
             "self_correction": {"valid": 0, "matched": 0, "total": 0}
         }
         
+        # Complexity metrics tracking
+        from collections import defaultdict
+        complexity_metrics = {
+            "zero_shot": defaultdict(lambda: {'total': 0, 'valid': 0, 'matched': 0}),
+            "few_shot": defaultdict(lambda: {'total': 0, 'valid': 0, 'matched': 0}),
+            "self_correction": defaultdict(lambda: {'total': 0, 'valid': 0, 'matched': 0})
+        }
+        
         # Evaluate each method
         for method_name in ["zero_shot","few_shot","self_correction"]:
             print(f"\n{'='*60}")
@@ -571,9 +532,13 @@ class SpiderEvaluator:
                     else:  # self_correction with semantic feedback
                         result = self.self_correction(question, schema, db_path, gold_sql)
                     
+                    # Categorize complexity
+                    complexity_categories = categorize_sql_complexity(gold_sql)
+                    
                     result["question"] = question
                     result["gold_sql"] = gold_sql
                     result["db_id"] = db_id
+                    result["complexity"] = complexity_categories
                     results[method_name].append(result)
                     
                     # Update stats
@@ -582,6 +547,14 @@ class SpiderEvaluator:
                         stats[method_name]["valid"] += 1
                     if result.get("results_match", False):
                         stats[method_name]["matched"] += 1
+                    
+                    # Update complexity metrics
+                    for category in complexity_categories:
+                        complexity_metrics[method_name][category]["total"] += 1
+                        if result.get("is_valid", False):
+                            complexity_metrics[method_name][category]["valid"] += 1
+                        if result.get("results_match", False):
+                            complexity_metrics[method_name][category]["matched"] += 1
                     
                     # Print intermediate results
                     if (i + 1) % print_every == 0:
@@ -612,72 +585,90 @@ class SpiderEvaluator:
         
         # Save results and generate report
         self._save_results(results, output_dir)
-        self._generate_report(results, output_dir)
+        self._generate_report(results, output_dir, complexity_metrics)
         
         return results
     
     def _save_results(self, results: Dict, output_dir: str):
-        """Save results to JSONL files"""
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        for method, data in results.items():
-            filepath = output_path / f"{method}_results.jsonl"
-            with open(filepath, "w") as f:
-                for item in data:
-                    f.write(json.dumps(item) + "\n")
-            print(f"\n✅ Saved {method} results to: {filepath}")
+        """Save results to JSONL files using shared utility"""
+        save_evaluation_results(results, output_dir)
+        print(f"\n✅ Saved results to: {output_dir}/")
     
-    def _generate_report(self, results: Dict, output_dir: str):
-        """Generate comparison report"""
+    def _generate_report(self, results: Dict, output_dir: str, complexity_metrics: Dict):
+        """Generate comparison report with complexity breakdown"""
         
         print(f"\n{'='*60}")
         print("RESULTS SUMMARY")
         print(f"{'='*60}\n")
         
-        report = "# Baseline Evaluation Results\n\n"
-        report += f"Model: {self.model_name}\n"
-        report += f"Dataset: Spider Dev (HuggingFace: AsadIsmail/nl2sql-deduplicated)\n\n"
-        report += "## Summary\n\n"
-        report += "| Method | Valid SQL % | Results Match % | Avg Time (s) | Avg Attempts |\n"
-        report += "|--------|-------------|-----------------|--------------|-------------|\n"
-        
+        # Calculate metrics for each method
+        all_metrics = {}
         for method, data in results.items():
-            valid_count = sum(1 for r in data if r.get("is_valid", False))
-            valid_pct = 100 * valid_count / len(data) if data else 0
+            metrics = calculate_metrics(data)
+            metrics['avg_attempts'] = sum(r.get("num_attempts", 1) for r in data) / len(data) if data else 0
+            all_metrics[method] = metrics
             
-            match_count = sum(1 for r in data if r.get("results_match", False))
-            match_pct = 100 * match_count / len(data) if data else 0
-            
-            avg_time = sum(r.get("inference_time", 0) for r in data) / len(data) if data else 0
-            avg_attempts = sum(r.get("num_attempts", 1) for r in data) / len(data) if data else 0
-            
-            report += f"| {method.replace('_', ' ').title()} | {valid_pct:.1f}% | {match_pct:.1f}% | {avg_time:.2f} | {avg_attempts:.1f} |\n"
-            
+            # Print to console
             print(f"{method.upper()}")
-            print(f"  Valid SQL: {valid_count}/{len(data)} ({valid_pct:.1f}%)")
-            print(f"  Results Match Gold: {match_count}/{len(data)} ({match_pct:.1f}%)")
-            print(f"  Avg time: {avg_time:.2f}s")
-            print(f"  Avg attempts: {avg_attempts:.1f}")
+            print(f"  Valid SQL: {metrics['valid_sql_count']}/{metrics['total_examples']} ({metrics['valid_sql_pct']:.1f}%)")
+            print(f"  Results Match Gold: {metrics['result_match_count']}/{metrics['total_examples']} ({metrics['result_match_pct']:.1f}%)")
+            print(f"  Avg time: {metrics['avg_inference_time']:.2f}s")
+            print(f"  Avg attempts: {metrics['avg_attempts']:.1f}")
             print()
         
-        report += "\n## Notes\n\n"
-        report += "- **Zero-shot**: Single generation attempt\n"
-        report += "- **Few-shot**: Uses 2 examples from dataset\n"
-        report += "- **Self-correction**: Up to 3 attempts to fix execution errors\n\n"
-        report += "- **Valid SQL** = Query executed without errors\n"
-        report += "- **Results Match** = Execution results identical to gold standard\n\n"
-        report += "### Self-Correction Process\n\n"
-        report += "The self-correction method includes:\n"
-        report += "1. **Execution error fixing**: Up to 3 attempts to generate valid SQL\n"
-        report += "2. **LLM validation**: Ask LLM if the query correctly answers the question\n"
-        report += "3. **Result comparison**: Compare execution results with gold standard\n\n"
-        report += "This provides both syntactic correctness and semantic validation.\n"
+        # Build summary table
+        summary_table = "| Method | Valid SQL % | Results Match % | Avg Time (s) | Avg Attempts |\n"
+        summary_table += "|--------|-------------|-----------------|--------------|-------------|\n"
         
-        # Save report
-        report_path = Path(output_dir) / "evaluation_report.md"
-        with open(report_path, "w") as f:
-            f.write(report)
+        for method, metrics in all_metrics.items():
+            summary_table += f"| {method.replace('_', ' ').title()} | "
+            summary_table += f"{metrics['valid_sql_pct']:.1f}% | "
+            summary_table += f"{metrics['result_match_pct']:.1f}% | "
+            summary_table += f"{metrics['avg_inference_time']:.2f} | "
+            summary_table += f"{metrics['avg_attempts']:.1f} |\n"
+        
+        # Build complexity breakdown for each method
+        complexity_section = ""
+        for method in ["zero_shot", "few_shot", "self_correction"]:
+            if method in complexity_metrics:
+                complexity_section += f"\n### {method.replace('_', ' ').title()}\n\n"
+                for category, stats in sorted(complexity_metrics[method].items()):
+                    if stats['total'] > 0:
+                        complexity_section += f"**{category.upper().replace('_', ' ')}**: "
+                        complexity_section += f"Valid: {stats['valid']}/{stats['total']} ({100*stats['valid']/stats['total']:.1f}%), "
+                        complexity_section += f"Match: {stats['matched']}/{stats['total']} ({100*stats['matched']/stats['total']:.1f}%)\n\n"
+        
+        notes = """- **Zero-shot**: Single generation attempt
+- **Few-shot**: Uses 2 examples from dataset
+- **Self-correction**: Up to 3 attempts to fix execution errors
+
+- **Valid SQL** = Query executed without errors
+- **Results Match** = Execution results identical to gold standard
+
+### Self-Correction Process
+
+The self-correction method includes:
+1. **Execution error fixing**: Up to 3 attempts to generate valid SQL
+2. **LLM validation**: Ask LLM if the query correctly answers the question
+3. **Result comparison**: Compare execution results with gold standard
+
+This provides both syntactic correctness and semantic validation."""
+        
+        # Generate report using shared utility
+        sections = {
+            "Summary": summary_table,
+            "Performance by SQL Complexity": complexity_section,
+            "Notes": notes
+        }
+        
+        report_path = generate_markdown_report(
+            metrics={},
+            output_dir=output_dir,
+            title="Baseline Evaluation Results",
+            model_name=self.model_name,
+            dataset_name="Spider Dev (HuggingFace: AsadIsmail/nl2sql-deduplicated)",
+            additional_sections=sections
+        )
         
         print(f"{'='*60}")
         print(f"✅ Report saved to: {report_path}")

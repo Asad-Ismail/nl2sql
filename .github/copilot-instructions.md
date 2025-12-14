@@ -50,7 +50,7 @@ Text-to-SQL training pipeline focused on multi-dataset training (752K examples) 
 - **Validation during training**: Execute generated SQL to verify correctness, not just syntax
 - **GPU requirements**: 16GB+ VRAM for 7B model inference/training
 
-### Code Style (per `python.instructions.md`)
+### Code Style (per `.github/instructions/python.instructions.md`)
 - Type hints mandatory: `def generate_sql(prompt: str, max_new_tokens: int = 256) -> str`
 - Docstrings: PEP 257 format with Parameters/Returns sections
 - Line length: 100 chars (set in `pyproject.toml` for black/ruff)

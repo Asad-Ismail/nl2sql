@@ -1,5 +1,10 @@
 # NL2SQL: Multi-Dataset Training Pipeline
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Dataset](https://img.shields.io/badge/🤗%20Dataset-nl2sql--deduplicated-yellow)](https://huggingface.co/datasets/AsadIsmail/nl2sql-deduplicated)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
 Train Text-to-SQL models on 10+ free datasets (~400K examples) and evaluate against established baselines.
 
 ## Quick Start
@@ -254,7 +259,22 @@ nl2sql/
 - GPU with 16GB+ VRAM (for inference on 7B models)
 - ~5GB disk space for Spider + eval data
 - ~20GB for full training datasets
-- Dependencies in `pyproject.toml`
+- Dependencies managed by `uv` (see `pyproject.toml`)
+
+## Installation
+
+```bash
+# Install uv (fast Python package manager)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone repository
+git clone https://github.com/Asad-Ismail/nl2sql.git
+cd nl2sql
+
+# Install dependencies
+uv sync
+source .venv/bin/activate
+```
 
 ## FAQ
 
@@ -270,6 +290,37 @@ A: Any HuggingFace CausalLM model. Tested: CodeLlama-7B, Llama-2-7B, Mistral-7B
 **Q: How long does evaluation take?**  
 A: ~30 minutes for 100 samples, ~5 hours for full dev set (1034 examples)
 
+**Q: Where can I find the pre-cleaned dataset?**  
+A: https://huggingface.co/datasets/AsadIsmail/nl2sql-deduplicated
+
+**Q: Can I contribute?**  
+A: Yes! Fork the repo, make changes following PEP 8 style, and submit a PR
+
+## Contributing
+
+Contributions are welcome! To contribute:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Follow code style: PEP 8, type hints, docstrings (see `.github/instructions/python.instructions.md`)
+4. Commit changes (`git commit -m 'Add amazing feature'`)
+5. Push and open a Pull Request
+
+For bug reports or feature requests, use GitHub Issues.
+
+## Citation
+
+If you use this work in your research, please cite:
+
+```bibtex
+@software{nl2sql2025,
+  author = {Ismail, Asad},
+  title = {NL2SQL: Multi-Dataset Training Pipeline for Text-to-SQL},
+  year = {2025},
+  url = {https://github.com/Asad-Ismail/nl2sql}
+}
+```
+
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) file for details

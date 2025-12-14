@@ -32,102 +32,24 @@ from tqdm import tqdm
 import torch
 from datasets import load_dataset
 from unsloth import FastLanguageModel
-from nl2sql.utils.util import load_schemas
+from nl2sql.utils.util import (
+    load_schemas,
+    execute_sql,
+    compare_results,
+    calculate_metrics,
+    print_metrics,
+    print_comparison,
+    categorize_sql_complexity,
+    extract_sql_from_text,
+    get_db_path,
+    save_evaluation_results,
+    save_evaluation_summary,
+    generate_markdown_report,
+    SQL_PATTERNS
+)
 
 
-class SQLExecutor:
-    """Execute SQL queries on real Spider databases and compare results"""
-    
-    def __init__(self, database_dir: str = "database/spider_data/database"):
-        self.database_dir = database_dir
-    
-    def get_db_path(self, db_id: str) -> str:
-        """Get path to actual Spider database file"""
-        return os.path.join(self.database_dir, db_id, f"{db_id}.sqlite")
-    
-    def execute_sql(self, sql: str, db_path: str) -> Tuple[bool, Optional[str], Optional[List]]:
-        """
-        Execute SQL and return (success, error_message, results)
-        
-        Returns:
-            success (bool): Whether query executed without errors
-            error (str): Error message if failed, None otherwise
-            results (list): Query results if successful, None otherwise
-        """
-        if not os.path.exists(db_path):
-            return False, f"Database not found: {db_path}", None
-            
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute(sql)
-            results = cursor.fetchall()
-            conn.close()
-            return True, None, results
-        except Exception as e:
-            return False, str(e), None
-    
-    @staticmethod
-    def normalize_value(val):
-        """Normalize a single value for comparison"""
-        if val is None:
-            return None
-        return str(val).strip().lower()
-    
-    @staticmethod
-    def normalize_row(row):
-        """Normalize and sort a row to handle column order differences"""
-        if isinstance(row, (list, tuple)):
-            normalized = tuple(sorted(SQLExecutor.normalize_value(v) for v in row))
-        else:
-            normalized = (SQLExecutor.normalize_value(row),)
-        return normalized
-    
-    @classmethod
-    def compare_results(cls, generated_results: List, gold_results: List) -> Tuple[bool, str]:
-        """
-        Compare generated results with gold standard results
-        
-        Handles:
-        - Row order independence
-        - Column order independence (within rows)
-        - Type normalization (int vs float, string representations)
-        
-        Returns:
-            (matches, feedback)
-        """
-        if generated_results is None or gold_results is None:
-            return False, "Cannot compare - one or both queries failed to execute"
-        
-        # Convert to sets for row-order-independent comparison
-        try:
-            gen_set = set(cls.normalize_row(row) for row in generated_results)
-            gold_set = set(cls.normalize_row(row) for row in gold_results)
-        except Exception as e:
-            return False, f"Error normalizing results: {str(e)}"
-        
-        # Check for exact match
-        if gen_set == gold_set:
-            return True, "Results match gold standard"
-        
-        # Provide detailed feedback on differences
-        if len(gen_set) != len(gold_set):
-            return False, f"Result count mismatch: generated {len(gen_set)} rows, expected {len(gold_set)} rows"
-        
-        # Same number of rows but different content
-        return False, "Results differ from gold standard (same row count, different values)"
-
-
-# SQL complexity patterns (same as baseline)
-SQL_PATTERNS = {
-    'simple_select': r'^\s*SELECT\s+.*\s+FROM\s+\w+\s*;?\s*$',
-    'with_where': r'WHERE',
-    'with_join': r'JOIN',
-    'with_aggregation': r'(COUNT|SUM|AVG|MIN|MAX|GROUP BY)',
-    'with_subquery': r'SELECT.*SELECT',
-    'with_union': r'UNION',
-    'with_order_limit': r'(ORDER BY|LIMIT)',
-}
+# Removed SQLExecutor class and SQL_PATTERNS - now using shared utilities from util.py
 
 
 class FinetunedModelEvaluator:
@@ -138,9 +60,8 @@ class FinetunedModelEvaluator:
         self.database_dir = database_dir
         self.model = None
         self.tokenizer = None
-        self.sql_executor = SQLExecutor(database_dir)
         
-        # 🔥 FIXED: Load schemas from tables.json (same as baseline!)
+        # Load schemas from tables.json using shared utility
         print(f"\n{'='*60}")
         print(f"Loading Database Schemas from tables.json")
         print(f"{'='*60}\n")
@@ -230,18 +151,8 @@ class FinetunedModelEvaluator:
     
     @staticmethod
     def categorize_sql_complexity(sql: str) -> List[str]:
-        """Categorize SQL query complexity"""
-        categories = []
-        sql_upper = sql.upper()
-        
-        for category, pattern in SQL_PATTERNS.items():
-            if re.search(pattern, sql_upper, re.IGNORECASE | re.DOTALL):
-                categories.append(category)
-        
-        if not categories:
-            categories.append('simple_select')
-        
-        return categories
+        """Categorize SQL query complexity using shared utility"""
+        return categorize_sql_complexity(sql)
     
     def load_dataset_from_hf(self, num_samples: Optional[int] = None) -> List[Dict]:
         """Load Spider dev dataset from HuggingFace"""
@@ -336,8 +247,8 @@ class FinetunedModelEvaluator:
                 print(f"\n⚠️  Warning: No proper schema found for db_id={db_id}, skipping...")
                 continue
             
-            # Database path
-            db_path = self.sql_executor.get_db_path(db_id)
+            # Database path using shared utility
+            db_path = get_db_path(db_id, self.database_dir)
             
             if not os.path.exists(db_path):
                 print(f"\n⚠️  Warning: Database not found: {db_path}")
@@ -348,22 +259,22 @@ class FinetunedModelEvaluator:
                 should_print = print_prompts or (i == 0)
                 generated_sql = self.generate_sql(schema, question, print_prompt=should_print)
                 
-                # Execute generated SQL
-                gen_valid, gen_error, gen_results = self.sql_executor.execute_sql(
+                # Execute generated SQL using shared utility
+                gen_valid, gen_error, gen_results = execute_sql(
                     generated_sql, db_path
                 )
                 
-                # Execute gold SQL
-                gold_valid, gold_error, gold_results = self.sql_executor.execute_sql(
+                # Execute gold SQL using shared utility
+                gold_valid, gold_error, gold_results = execute_sql(
                     gold_sql, db_path
                 )
                 
-                # Compare results
+                # Compare results using shared utility
                 results_match = False
                 comparison_feedback = ""
                 
                 if gen_valid and gold_valid:
-                    results_match, comparison_feedback = self.sql_executor.compare_results(
+                    results_match, comparison_feedback = compare_results(
                         gen_results, gold_results
                     )
                 elif not gen_valid:
@@ -448,99 +359,86 @@ class FinetunedModelEvaluator:
         return results, metrics
     
     def _print_comparison(self, idx: int, result: Dict, gen_results, gold_results):
-        """Print intermediate comparison results"""
-        print(f"\n{'='*70}")
-        print(f"Example {idx + 1}")
-        print(f"{'='*70}")
-        print(f"Question: {result['question'][:100]}...")
-        print(f"\nGenerated SQL:\n  {result['generated_sql'][:150]}...")
-        print(f"\nGold SQL:\n  {result['gold_sql'][:150]}...")
-        
-        if result['is_valid']:
-            print(f"\n✅ Generated SQL executed successfully")
-            
-            if gen_results and len(gen_results) > 3:
-                print(f"Generated Results: {gen_results[:3]}...")
-            else:
-                print(f"Generated Results: {gen_results}")
-            
-            if gold_results is not None and len(gold_results) > 3:
-                print(f"Gold Results:      {gold_results[:3]}...")
-            elif gold_results is not None:
-                print(f"Gold Results:      {gold_results}")
-            
-            if result['results_match']:
-                print(f"🎯 MATCH: Results are identical!")
-            else:
-                print(f"❌ MISMATCH: {result['comparison_feedback']}")
-        else:
-            print(f"\n❌ Generated SQL failed: {result['error']}")
-        print(f"{'='*70}\n")
+        """Print intermediate comparison results using shared utility"""
+        print_comparison(
+            idx=idx,
+            question=result['question'],
+            gen_sql=result['generated_sql'],
+            gold_sql=result['gold_sql'],
+            gen_results=gen_results,
+            gold_results=gold_results,
+            results_match=result['results_match'],
+            is_valid=result['is_valid']
+        )
     
     def _save_results(self, results, metrics, complexity_metrics, error_patterns, output_dir):
-        """Save results to files"""
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+        """Save results to files using shared utilities"""
+        # Save detailed results using shared utility
+        save_evaluation_results(results, output_dir, prefix="detailed_results")
         
-        # Save detailed results
-        with open(output_path / "detailed_results.jsonl", "w") as f:
-            for item in results:
-                f.write(json.dumps(item) + "\n")
-        
-        # Save summary
-        summary = {
-            "overall_metrics": metrics,
-            "complexity_metrics": dict(complexity_metrics),
-            "error_patterns": dict(error_patterns)
-        }
-        with open(output_path / "summary.json", "w") as f:
-            json.dump(summary, f, indent=2)
+        # Save summary using shared utility
+        save_evaluation_summary(
+            metrics,
+            output_dir,
+            additional_data={
+                "complexity_metrics": dict(complexity_metrics),
+                "error_patterns": dict(error_patterns)
+            }
+        )
         
         print(f"\n✅ Saved results to: {output_dir}/")
     
     def _generate_report(self, metrics, complexity_metrics, error_patterns, output_dir):
-        """Generate evaluation report"""
+        """Generate evaluation report - preserves exact output format"""
         
         print(f"\n{'='*60}")
         print("EVALUATION RESULTS")
         print(f"{'='*60}\n")
         
-        report = "# Fine-tuned Model Evaluation Results\n\n"
-        report += f"Model: {self.model_path}\n"
-        report += f"Dataset: Spider Dev (HuggingFace)\n\n"
-        
-        # Overall metrics
-        report += "## Overall Metrics\n\n"
-        report += f"- Total Samples: {metrics['total']}\n"
-        report += f"- Valid SQL: {metrics['valid']} ({100*metrics['valid']/metrics['total']:.2f}%)\n"
-        report += f"- Results Match Gold: {metrics['matched']} ({100*metrics['matched']/metrics['total']:.2f}%)\n"
-        report += f"- Exact Match: {metrics['exact_match']} ({100*metrics['exact_match']/metrics['total']:.2f}%)\n\n"
-        
+        # Print to console (unchanged)
         print(f"Overall Metrics:")
         print(f"  Total: {metrics['total']}")
         print(f"  Valid SQL: {metrics['valid']} ({100*metrics['valid']/metrics['total']:.2f}%)")
         print(f"  Results Match: {metrics['matched']} ({100*metrics['matched']/metrics['total']:.2f}%)")
         print(f"  Exact Match: {metrics['exact_match']} ({100*metrics['exact_match']/metrics['total']:.2f}%)\n")
         
+        # Build custom sections for report
+        overall_section = f"""- Total Samples: {metrics['total']}
+- Valid SQL: {metrics['valid']} ({100*metrics['valid']/metrics['total']:.2f}%)
+- Results Match Gold: {metrics['matched']} ({100*metrics['matched']/metrics['total']:.2f}%)
+- Exact Match: {metrics['exact_match']} ({100*metrics['exact_match']/metrics['total']:.2f}%)"""
+        
         # Complexity breakdown
-        report += "## Performance by SQL Complexity\n\n"
+        complexity_section = ""
         for category, stats in sorted(complexity_metrics.items()):
             if stats['total'] > 0:
-                report += f"\n### {category.upper().replace('_', ' ')}\n"
-                report += f"- Total: {stats['total']}\n"
-                report += f"- Valid: {stats['valid']} ({100*stats['valid']/stats['total']:.2f}%)\n"
-                report += f"- Results Match: {stats['matched']} ({100*stats['matched']/stats['total']:.2f}%)\n"
+                complexity_section += f"\n### {category.upper().replace('_', ' ')}\n"
+                complexity_section += f"- Total: {stats['total']}\n"
+                complexity_section += f"- Valid: {stats['valid']} ({100*stats['valid']/stats['total']:.2f}%)\n"
+                complexity_section += f"- Results Match: {stats['matched']} ({100*stats['matched']/stats['total']:.2f}%)\n"
         
         # Error patterns
+        error_section = ""
         if error_patterns:
-            report += "\n## Error Analysis\n\n"
             for error_type, count in sorted(error_patterns.items(), key=lambda x: x[1], reverse=True):
-                report += f"- {error_type}: {count} ({100*count/metrics['total']:.2f}%)\n"
+                error_section += f"- {error_type}: {count} ({100*count/metrics['total']:.2f}%)\n"
         
-        # Save report
-        report_path = Path(output_dir) / "evaluation_report.md"
-        with open(report_path, "w") as f:
-            f.write(report)
+        # Use shared utility to generate report with custom sections
+        sections = {
+            "Overall Metrics": overall_section,
+            "Performance by SQL Complexity": complexity_section,
+        }
+        if error_section:
+            sections["Error Analysis"] = error_section
+        
+        report_path = generate_markdown_report(
+            metrics={},  # Empty since we're using custom sections
+            output_dir=output_dir,
+            title="Fine-tuned Model Evaluation Results",
+            model_name=self.model_path,
+            dataset_name="Spider Dev (HuggingFace)",
+            additional_sections=sections
+        )
         
         print(f"{'='*60}")
         print(f"✅ Report saved to: {report_path}")

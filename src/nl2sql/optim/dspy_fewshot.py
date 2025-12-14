@@ -10,45 +10,24 @@ from pathlib import Path
 from dspy.teleprompt import BootstrapFewShotWithRandomSearch
 from datasets import load_dataset
 from tqdm import tqdm
-from nl2sql.utils.util import load_schemas,execute_sql,print_comparison
+from nl2sql.utils.util import (
+    load_schemas,
+    execute_sql,
+    print_comparison,
+    compare_results,
+    extract_sql_from_text,
+    get_db_path,
+    categorize_sql_complexity,
+    calculate_metrics,
+    save_evaluation_results,
+    save_evaluation_summary,
+    generate_markdown_report
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# Schema Loading (same as baseline)
-# ==============================================================================
-def load_schemas():
-    """Load database schemas from Spider tables.json"""
-    schema_file = Path("database/spider_data/tables.json")
-    
-    if not schema_file.exists():
-        logger.error("tables.json not found!")
-        return {}
-    
-    with open(schema_file) as f:
-        tables_data = json.load(f)
-    
-    schemas = {}
-    for db in tables_data:
-        db_id = db['db_id']
-        table_names = db['table_names_original']
-        column_names = db['column_names_original']
-        column_types = db['column_types']
-        
-        # Format schema as CREATE TABLE statements
-        schema_lines = []
-        for table_idx, table_name in enumerate(table_names):
-            cols = [(col[1], column_types[i]) for i, col in enumerate(column_names) if col[0] == table_idx]
-            if cols:
-                col_defs = [f"{name} {dtype}" for name, dtype in cols]
-                schema_lines.append(f"CREATE TABLE {table_name} ({', '.join(col_defs)})")
-        
-        schemas[db_id] = "\n".join(schema_lines)
-    
-    return schemas
-
-# Load schemas once
+# Load schemas once using shared utility
 SCHEMAS = load_schemas()
 
 # ==============================================================================
@@ -85,31 +64,31 @@ class SQLModule(dspy.Module):
 # ==============================================================================
 
 def metric(example, prediction, trace=None):
+    """Evaluate prediction using shared utility functions"""
     if not hasattr(prediction, 'sql') or not prediction.sql:
         return 0.0
     
-    # Clean the generated SQL
-    pred_sql = prediction.sql.replace("```sql", "").replace("```", "").strip()
-    if pred_sql.startswith("]]"):
-        pred_sql = pred_sql[2:].strip()
-    pred_sql = pred_sql.lstrip('\n').strip()
-    # Execute both queries
-    db_path = f"database/spider_data/database/{example.db_id}/{example.db_id}.sqlite"
+    # Clean the generated SQL using shared utility
+    pred_sql = extract_sql_from_text(prediction.sql)
     
-    gold_results = execute_sql(example.sql, db_path)
-    pred_results = execute_sql(pred_sql, db_path)
+    # Execute both queries using shared utilities
+    db_path = get_db_path(example.db_id)
     
-    if gold_results is None or pred_results is None:
+    gold_success, gold_error, gold_results = execute_sql(example.sql, db_path)
+    pred_success, pred_error, pred_results = execute_sql(pred_sql, db_path)
+    
+    if not gold_success or not pred_success:
         print("❌ Execution failed")
         return 0.0
     
-    # Compare
-    if set(tuple(r) for r in pred_results) == set(tuple(r) for r in gold_results):
+    # Compare using shared utility
+    results_match, feedback = compare_results(pred_results, gold_results)
+    
+    if results_match:
         print("✅ Match!")
         return 1.0
     else:
         print("❌ Mismatch")
-        #print(f"GT Results: {gold_results}, Predicted Results {pred_results}")
         return 0.0
 
 # ==============================================================================
@@ -134,6 +113,71 @@ def convert_to_dspy(dataset_split):
             db_id=db_id
         ).with_inputs('db_schema', 'question'))
     return examples
+
+
+def generate_optimization_report(baseline_results, baseline_metrics, baseline_complexity,
+                                 optimized_results, optimized_metrics, optimized_complexity,
+                                 output_dir="results/dspy_optimized"):
+    """Generate comprehensive optimization report"""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save results
+    save_evaluation_results(baseline_results, output_dir, prefix="baseline_results")
+    save_evaluation_results(optimized_results, output_dir, prefix="optimized_results")
+    
+    # Save summaries
+    save_evaluation_summary(baseline_metrics, output_dir, 
+                           additional_data={"complexity_metrics": dict(baseline_complexity)})
+    
+    # Build comparison sections
+    comparison_table = """| Metric | Baseline | Optimized | Improvement |
+|--------|----------|-----------|-------------|
+"""
+    
+    comparison_table += f"| Valid SQL | {baseline_metrics['valid_sql_pct']:.1f}% | {optimized_metrics['valid_sql_pct']:.1f}% | "
+    comparison_table += f"{optimized_metrics['valid_sql_pct'] - baseline_metrics['valid_sql_pct']:+.1f}% |\n"
+    
+    comparison_table += f"| Results Match | {baseline_metrics['result_match_pct']:.1f}% | {optimized_metrics['result_match_pct']:.1f}% | "
+    comparison_table += f"{optimized_metrics['result_match_pct'] - baseline_metrics['result_match_pct']:+.1f}% |\n"
+    
+    comparison_table += f"| Total Examples | {baseline_metrics['total_examples']} | {optimized_metrics['total_examples']} | - |\n"
+    
+    # Complexity breakdown
+    complexity_section = "### Baseline (Before Optimization)\n\n"
+    for category, stats in sorted(baseline_complexity.items()):
+        if stats['total'] > 0:
+            complexity_section += f"**{category.upper().replace('_', ' ')}**: "
+            complexity_section += f"Valid: {stats['valid']}/{stats['total']} ({100*stats['valid']/stats['total']:.1f}%), "
+            complexity_section += f"Match: {stats['matched']}/{stats['total']} ({100*stats['matched']/stats['total']:.1f}%)\n\n"
+    
+    complexity_section += "\n### Optimized (After Optimization)\n\n"
+    for category, stats in sorted(optimized_complexity.items()):
+        if stats['total'] > 0:
+            complexity_section += f"**{category.upper().replace('_', ' ')}**: "
+            complexity_section += f"Valid: {stats['valid']}/{stats['total']} ({100*stats['valid']/stats['total']:.1f}%), "
+            complexity_section += f"Match: {stats['matched']}/{stats['total']} ({100*stats['matched']/stats['total']:.1f}%)\n\n"
+    
+    # Generate report
+    sections = {
+        "Performance Comparison": comparison_table,
+        "Performance by SQL Complexity": complexity_section,
+        "Notes": """- **Baseline**: Zero-shot predictions without optimization
+- **Optimized**: After DSPy BootstrapFewShot optimization
+- **Metric**: Result match percentage (execution results identical to gold standard)
+- **Optimization**: Uses few-shot examples selected automatically by DSPy"""
+    }
+    
+    report_path = generate_markdown_report(
+        metrics={},
+        output_dir=output_dir,
+        title="DSPy Optimization Results",
+        model_name="CodeLlama-7B-Instruct (via vLLM)",
+        dataset_name="Spider (Train subset for optimization, Dev for evaluation)",
+        additional_sections=sections
+    )
+    
+    logger.info(f"\n✅ Optimization report saved to: {report_path}")
+    return report_path
 
 
 def load_data():
@@ -163,15 +207,61 @@ def load_data():
 
     
 
-def evaluate(module, devset):
-    """Evaluate module on devset and return average score"""
-    scores = []
-    for example in tqdm(devset,total=len(devset)):
+def evaluate(module, devset, print_every=10):
+    """Evaluate module with detailed metrics and complexity tracking"""
+    from collections import defaultdict
+    
+    results = []
+    complexity_metrics = defaultdict(lambda: {'total': 0, 'valid': 0, 'matched': 0})
+    
+    for i, example in enumerate(tqdm(devset, desc="Evaluating")):
         prediction = module(db_schema=example.db_schema, question=example.question)
-        score = metric(example, prediction)
-        scores.append(score)
-        print(f"Running Score {sum(scores)}/{len(scores)}")
-    return sum(scores) / len(scores) if scores else 0.0
+        
+        # Extract SQL
+        pred_sql = extract_sql_from_text(prediction.sql) if hasattr(prediction, 'sql') and prediction.sql else ""
+        
+        # Execute and compare
+        db_path = get_db_path(example.db_id)
+        gold_success, gold_error, gold_results = execute_sql(example.sql, db_path)
+        pred_success, pred_error, pred_results = execute_sql(pred_sql, db_path)
+        
+        results_match = False
+        if gold_success and pred_success:
+            results_match, _ = compare_results(pred_results, gold_results)
+        
+        # Categorize complexity
+        complexity_categories = categorize_sql_complexity(example.sql)
+        
+        # Store result
+        result = {
+            "question": example.question,
+            "db_id": example.db_id,
+            "generated_sql": pred_sql,
+            "gold_sql": example.sql,
+            "is_valid": pred_success,
+            "results_match": results_match,
+            "complexity": complexity_categories
+        }
+        results.append(result)
+        
+        # Update complexity metrics
+        for category in complexity_categories:
+            complexity_metrics[category]['total'] += 1
+            if pred_success:
+                complexity_metrics[category]['valid'] += 1
+            if results_match:
+                complexity_metrics[category]['matched'] += 1
+        
+        # Print progress
+        if (i + 1) % print_every == 0:
+            matched = sum(1 for r in results if r['results_match'])
+            valid = sum(1 for r in results if r['is_valid'])
+            print(f"\nProgress: Valid {valid}/{len(results)} ({100*valid/len(results):.1f}%), Match {matched}/{len(results)} ({100*matched/len(results):.1f}%)")
+    
+    # Calculate overall metrics
+    metrics = calculate_metrics(results)
+    
+    return results, metrics, complexity_metrics
 
 
 # ==============================================================================
@@ -183,17 +273,23 @@ def main():
     
     logger.info("Loading data...")
     trainset, valset, devset = load_data()
-    logger.info(f"Loaded {len(trainset)} train, Loaded {len(valset)}, Loaded final test set {len(devset)} ")
+    logger.info(f"Loaded {len(trainset)} train, {len(valset)} val, {len(devset)} test")
     
     # Evaluate baseline (before optimization)
     logger.info("\n" + "="*80)
     logger.info("EVALUATING BASELINE (Before Optimization)")
     logger.info("="*80)
     baseline = SQLModule()
-    #baseline_score = evaluate(baseline, devset)
-    #logger.info(f"Baseline score is {baseline_score}")
+    baseline_results, baseline_metrics, baseline_complexity = evaluate(baseline, devset)
     
-    logger.info("Starting optimization...")
+    logger.info(f"\nBaseline Results:")
+    logger.info(f"  Valid SQL: {baseline_metrics['valid_sql_count']}/{baseline_metrics['total_examples']} ({baseline_metrics['valid_sql_pct']:.1f}%)")
+    logger.info(f"  Results Match: {baseline_metrics['result_match_count']}/{baseline_metrics['total_examples']} ({baseline_metrics['result_match_pct']:.1f}%)")
+    
+    # Run optimization
+    logger.info("\n" + "="*80)
+    logger.info("RUNNING OPTIMIZATION")
+    logger.info("="*80)
     optimizer = BootstrapFewShotWithRandomSearch(
         metric=metric,
         max_bootstrapped_demos=2,
@@ -203,28 +299,39 @@ def main():
     )
     
     compiled = optimizer.compile(SQLModule(), trainset=trainset, valset=valset)
-
-    exit()
-
+    
     # Evaluate optimized model (after optimization)
     logger.info("\n" + "="*80)
     logger.info("EVALUATING OPTIMIZED MODEL (After Optimization)")
     logger.info("="*80)
-    optimized_score = evaluate(compiled, devset)
+    optimized_results, optimized_metrics, optimized_complexity = evaluate(compiled, devset)
+    
+    logger.info(f"\nOptimized Results:")
+    logger.info(f"  Valid SQL: {optimized_metrics['valid_sql_count']}/{optimized_metrics['total_examples']} ({optimized_metrics['valid_sql_pct']:.1f}%)")
+    logger.info(f"  Results Match: {optimized_metrics['result_match_count']}/{optimized_metrics['total_examples']} ({optimized_metrics['result_match_pct']:.1f}%)")
     
     # Print final comparison
-    logger.info("\n" + "="*100)
-    logger.info("FINAL RESULTS")
-    logger.info("="*100)
-    #logger.info(f"📊 Baseline Score (Before):  {baseline_score:.2%} ({baseline_score:.4f})")
-    logger.info(f"📊 Optimized Score (After):  {optimized_score:.2%} ({optimized_score:.4f})")
-    #logger.info(f"📈 Improvement:              {(optimized_score - baseline_score):.2%} ({optimized_score - baseline_score:+.4f})")
-    logger.info("="*100)
+    logger.info("\n" + "="*80)
+    logger.info("FINAL COMPARISON")
+    logger.info("="*80)
+    logger.info(f"Valid SQL:      {baseline_metrics['valid_sql_pct']:.1f}% → {optimized_metrics['valid_sql_pct']:.1f}% ({optimized_metrics['valid_sql_pct'] - baseline_metrics['valid_sql_pct']:+.1f}%)")
+    logger.info(f"Results Match:  {baseline_metrics['result_match_pct']:.1f}% → {optimized_metrics['result_match_pct']:.1f}% ({optimized_metrics['result_match_pct'] - baseline_metrics['result_match_pct']:+.1f}%)")
+    logger.info("="*80)
     
+    # Save optimized model
     logger.info("\nSaving optimized model...")
     os.makedirs("models/dspy_optimized", exist_ok=True)
     compiled.save("models/dspy_optimized/nl2sql.json")
-    logger.info("Done!")
+    logger.info("✅ Model saved to: models/dspy_optimized/nl2sql.json")
+    
+    # Generate comprehensive report
+    logger.info("\nGenerating optimization report...")
+    generate_optimization_report(
+        baseline_results, baseline_metrics, baseline_complexity,
+        optimized_results, optimized_metrics, optimized_complexity
+    )
+    
+    logger.info("\n✅ Optimization complete!")
     
 
 if __name__ == "__main__":
