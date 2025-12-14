@@ -57,7 +57,7 @@ lm = dspy.LM(
     model="openai/TheBloke/CodeLlama-7B-Instruct-AWQ",
     api_base="http://localhost:8000/v1",
     api_key="dummy",
-    max_tokens=1024,
+    max_tokens=500,
     temperature=0.0
 )
 dspy.configure(lm=lm)
@@ -181,6 +181,7 @@ def evaluate(module, devset):
         prediction = module(db_schema=example.db_schema, question=example.question)
         score = metric(example, prediction)
         scores.append(score)
+        print(f"Running Score {sum(scores)}/{len(scores)}")
     return sum(scores) / len(scores) if scores else 0.0
 
 
