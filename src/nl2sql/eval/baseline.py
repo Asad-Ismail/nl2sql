@@ -5,21 +5,6 @@ Evaluates 3 standard baseline approaches:
 1. Zero-shot: Single LLM call without examples
 2. Few-shot: With 2 similar examples  
 3. Self-correction: Generate → Fix execution errors → LLM validation → Result comparison
-
-Key improvements:
-- Uses vLLM for 3-5x faster inference
-- Uses HuggingFace datasets instead of local files
-- LLM-based semantic validation (asks if SQL answers the question)
-- Compares execution results with gold standard
-- Shows intermediate results during evaluation
-- Simpler and more reliable than SQL parsing
-
-Requirements:
-    pip install vllm openai datasets tqdm
-
-Start vLLM server first:
-    vllm serve codellama/CodeLlama-7b-Instruct-hf --host 0.0.0.0 --port 8000
-
 Usage:
     python baseline_improved.py --model codellama/CodeLlama-7b-hf
     python baseline_improved.py --model meta-llama/Llama-2-7b-hf --num-samples 50
@@ -36,6 +21,7 @@ from openai import OpenAI
 from tqdm import tqdm
 import time
 from datasets import load_dataset
+from ratelimit import limits, sleep_and_retry
 from nl2sql.utils.util import (
     load_schemas,
     execute_sql,
@@ -162,27 +148,28 @@ class SpiderEvaluator:
     def load_model(self):
         """Connect to vLLM server via OpenAI API"""
         print(f"\n{'='*60}")
-        print(f"Connecting to vLLM server: {self.vllm_url}")
+        print(f"Connecting to server: {self.vllm_url}")
         print(f"Model: {self.model_name}")
         print(f"{'='*60}\n")
         
         # Initialize OpenAI client pointing to vLLM server
+        key = "sk-local"
+
+        print(f"{self.vllm_url}")
         self.client = OpenAI(
-            api_key="EMPTY",  # vLLM doesn't require API key
+            api_key=key,  # vLLM doesn't require API key
             base_url=self.vllm_url
         )
-        
-        # Test connection
         try:
-            # Simple test to verify server is running
-            response = self.client.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.model_name,
-                prompt="SELECT",
-                max_tokens=1,
+                messages=[{"role": "user", "content": "SELECT"}],
+                max_tokens=20,
                 temperature=0.1
             )
-            print("✓ Successfully connected to vLLM server\n")
+            print("✓ Successfully connected to server\n")
         except Exception as e:
+            print(f"{key}")
             print(f"❌ Error connecting to vLLM server: {e}")
             print(f"\nMake sure vLLM server is running:")
             print(f"  vllm serve {self.model_name} --host 0.0.0.0 --port 8000\n")
@@ -192,23 +179,30 @@ class SpiderEvaluator:
         self.semantic_validator = SemanticValidator(self.generate_sql)
         
         print("Client initialized successfully\n")
-    
-    def generate_sql(self, prompt: str, max_new_tokens: int = 256) -> str:
+
+    @sleep_and_retry              
+    @limits(calls=35, period=60)
+    def generate_sql(self, prompt: str, max_new_tokens: int = 1024) -> str:
         """Generate SQL from prompt using vLLM via OpenAI API"""
         try:
-            response = self.client.completions.create(
+            # Wrap the raw prompt in the user role
+            messages = [{"role": "user", "content": prompt}]
+    
+            response = self.client.chat.completions.create(
                 model=self.model_name,
-                prompt=prompt,
+                messages=messages,
                 max_tokens=max_new_tokens,
                 temperature=0.0,
                 top_p=1.0,
-                stop=["\n\n", "###", "Question:", "Schema:"]  # Stop at common delimiters
+                stop=["\n\n", "###"] # Uncomment if needed
             )
             
-            generated = response.choices[0].text
+            # Access content via message.content, not text
+            generated = response.choices[0].message.content
+            
             sql = self._extract_sql(generated)
             return sql.strip()
-            
+                
         except Exception as e:
             print(f"Error generating SQL: {e}")
             return ""
@@ -224,7 +218,7 @@ class SpiderEvaluator:
     def zero_shot(self, question: str, schema: str, db_path: str, gold_sql: str = None) -> Dict:
         """Baseline 1: Single LLM call without examples"""
         
-        prompt = f"""### Task: Convert the following natural language question to a SQL query.
+        prompt = f"""### Task: Convert the following natural language question to a SQL query.  Give only SQL Query as Output
 
 ### Database Schema:
 {schema}
@@ -235,7 +229,7 @@ class SpiderEvaluator:
 """
         
         start_time = time.time()
-        sql = self.generate_sql(prompt, max_new_tokens=150)
+        sql = self.generate_sql(prompt, max_new_tokens=250)
         inference_time = time.time() - start_time
         
         # Execute generated SQL
@@ -269,7 +263,7 @@ class SpiderEvaluator:
                  examples: List[Dict], gold_sql: str = None) -> Dict:
         """Baseline 2: Few-shot with similar examples"""
         
-        prompt = "### Task: Convert natural language questions to SQL queries.\n\n"
+        prompt = "### Task: Convert natural language questions to SQL queries.  Give only SQL Query as Output \n\n"
         prompt += "### Examples:\n\n"
         
         # Add 2-3 examples
@@ -285,7 +279,7 @@ class SpiderEvaluator:
         prompt += f"SQL Query:\n"
         
         start_time = time.time()
-        sql = self.generate_sql(prompt, max_new_tokens=150)
+        sql = self.generate_sql(prompt, max_new_tokens=250)
         inference_time = time.time() - start_time
         
         # Execute generated SQL
@@ -341,7 +335,7 @@ class SpiderEvaluator:
         best_attempt = None
         best_results = None
         
-        prompt = f"""### Task: Convert the following natural language question to a SQL query.
+        prompt = f"""### Task: Convert the following natural language question to a SQL query. Give only SQL Query as Output
 
 ### Database Schema:
 {schema}
@@ -480,7 +474,7 @@ class SpiderEvaluator:
         data = self.load_dataset_from_hf(num_samples=num_samples)
         
         print(f"Evaluating on {len(data)} examples\n")
-        print(f"📊 Printing intermediate results every {print_every} examples\n")
+        print(f"Printing intermediate results every {print_every} examples\n")
         
         # Load model
         self.load_model()
@@ -670,7 +664,7 @@ def main():
                        help="Model name (must match vLLM server)")
     parser.add_argument("--vllm-url", type=str, default="http://localhost:8000/v1",
                        help="vLLM server URL")
-    parser.add_argument("--output", type=str, default="results/baseline",
+    parser.add_argument("--output", type=str, default="results/baseline_nematron3",
                        help="Output directory for results")
     parser.add_argument("--num-samples", type=int, default=None,
                        help="Number of samples to evaluate (default: all)")

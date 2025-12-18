@@ -37,16 +37,32 @@ lm = dspy.LM(
     model="openai/TheBloke/CodeLlama-7B-Instruct-AWQ",
     api_base="http://localhost:8000/v1",
     api_key="dummy",
-    max_tokens=500,
+    max_tokens=1024,
     temperature=0.0
 )
 dspy.configure(lm=lm)
+use_teacher=True
+
+if use_teacher:
+    from dotenv import load_dotenv, find_dotenv
+    import os
+    dotenv_path = find_dotenv()
+    assert dotenv_path
+    secret = os.getenv("NVIDIA_API_KEY")
+    assert secret is not None, "API_KEY not found in .env!"
+    model="moonshotai/kimi-k2-thinking"
+    teacher_lm = dspy.LM(
+    model=f"openai/{model}",          
+    api_key=secret,                      
+    api_base="https://integrate.api.nvidia.com/v1",  
+    temperature=0.7)
+
 
 # ==============================================================================
 # Module
 # ==============================================================================
 class TextToSQL(dspy.Signature):
-    """Convert natural language to SQL."""
+    """Convert natural language to SQL given the schema. Return only the SQL query."""
     db_schema = dspy.InputField()
     question = dspy.InputField()
     sql = dspy.OutputField()
@@ -117,7 +133,7 @@ def convert_to_dspy(dataset_split):
 
 def generate_optimization_report(baseline_results, baseline_metrics, baseline_complexity,
                                  optimized_results, optimized_metrics, optimized_complexity,
-                                 output_dir="results/dspy_optimized"):
+                                 output_dir="results/dspy_optimized_teacher_lm"):
     """Generate comprehensive optimization report"""
     os.makedirs(output_dir, exist_ok=True)
     
@@ -292,13 +308,28 @@ def main():
     logger.info("="*80)
     optimizer = BootstrapFewShotWithRandomSearch(
         metric=metric,
-        max_bootstrapped_demos=2,
-        max_labeled_demos=2,
-        max_rounds=3,
+        max_bootstrapped_demos=1,
+        max_labeled_demos=0,
+        max_rounds=1,
         num_candidate_programs=5
     )
-    
-    compiled = optimizer.compile(SQLModule(), trainset=trainset, valset=valset)
+    opt_valset = valset[:50]
+
+
+    teacher_module = SQLModule()
+
+    # Force the teacher module to use the Moonshot LM
+    # We iterate through the predictors (dspy.Predict) and override their LM
+    for p in teacher_module.predictors():
+        p.lm = teacher_lm
+        
+    # 3. Compile passing the teacher MODULE, not the LM
+    compiled = optimizer.compile(
+        student=SQLModule(),       # The student uses the default LM (CodeLlama)
+        teacher=teacher_module,    # The teacher uses the overridden LM (Moonshot)
+        trainset=trainset, 
+        valset=opt_valset
+    )
     
     # Evaluate optimized model (after optimization)
     logger.info("\n" + "="*80)

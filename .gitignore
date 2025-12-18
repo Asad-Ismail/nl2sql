@@ -216,3 +216,4 @@ models/*
 !models/codellama_chat.jinja
 results/
 *.txt
+logs/

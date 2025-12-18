@@ -199,7 +199,7 @@ class FinetunedModelEvaluator:
         print(f"Evaluating on {len(data)} examples")
         print(f" Printing intermediate results every {print_every} examples")
         if print_prompts:
-            print(f"🔍 Printing ALL prompts sent to model")
+            print(f" Printing ALL prompts sent to model")
         print()
         
         # Results storage
