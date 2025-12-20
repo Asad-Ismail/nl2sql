@@ -1,369 +1,265 @@
 """
 DSPy Optimizer for NL2SQL
+Enhanced version with CLI support for different models, optimizers, and teacher settings.
 """
+
 import dspy
 import os
-import sqlite3
 import logging
-import json
+import argparse
 from pathlib import Path
-from dspy.teleprompt import BootstrapFewShotWithRandomSearch
+from collections import defaultdict
 from datasets import load_dataset
 from tqdm import tqdm
+from dotenv import load_dotenv, find_dotenv
+from dspy.utils.callback import BaseCallback
+# utility imports
 from nl2sql.utils.util import (
-    load_schemas,
-    execute_sql,
-    print_comparison,
-    compare_results,
-    extract_sql_from_text,
-    get_db_path,
-    categorize_sql_complexity,
-    calculate_metrics,
-    save_evaluation_results,
-    save_evaluation_summary,
-    generate_markdown_report
+    load_schemas, execute_sql, compare_results, extract_sql_from_text,
+    get_db_path, categorize_sql_complexity, calculate_metrics,
+    save_evaluation_results, save_evaluation_summary, generate_markdown_report
 )
 
-logging.basicConfig(level=logging.INFO)
+# Configuration and Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# Load schemas once using shared utility
 SCHEMAS = load_schemas()
 
-# ==============================================================================
-# LM Setup
-# ==============================================================================
-lm = dspy.LM(
-    model="openai/TheBloke/CodeLlama-7B-Instruct-AWQ",
-    api_base="http://localhost:8000/v1",
-    api_key="dummy",
-    max_tokens=1024,
-    temperature=0.0
-)
-dspy.configure(lm=lm)
-use_teacher=True
+class LLMLogger(BaseCallback):
+    def on_lm_start(self, call_id, instance, inputs):
+        # Identify which model is being called
+        model_name = getattr(instance, 'model', 'Unknown Model')
+        prompt = inputs.get('prompt') or inputs.get('messages')
+        
+        print(f"\n{'='*20} [LM CALL START] {'='*20}")
+        print(f"MODEL:   {model_name}")
+        print(f"CALL ID: {call_id}")
+        # Optionally truncate the prompt if it's too long for the console
+        print(f"PROMPT:  {str(prompt)}") 
 
-if use_teacher:
-    from dotenv import load_dotenv, find_dotenv
-    import os
-    dotenv_path = find_dotenv()
-    assert dotenv_path
-    secret = os.getenv("NVIDIA_API_KEY")
-    assert secret is not None, "API_KEY not found in .env!"
-    model="moonshotai/kimi-k2-thinking"
-    teacher_lm = dspy.LM(
-    model=f"openai/{model}",          
-    api_key=secret,                      
-    api_base="https://integrate.api.nvidia.com/v1",  
-    temperature=0.7)
+    def on_lm_end(self, call_id, outputs, exception, **kwargs):
+        # We use **kwargs here to catch 'instance' and any other metadata
+        # Access the instance from kwargs to identify the model
+        instance = kwargs.get('instance')
+        model_name = getattr(instance, 'model', 'Unknown Model')
+        
+        print(f"\n{'-'*20} [LM CALL END] {'-'*20}")
+        print(f"MODEL:   {model_name}")
+        print(f"CALL ID: {call_id}")
+        
+        if exception:
+            print(f"ERROR:   {exception}")
+        else:
+            # outputs is usually a list of completions
+            print(f"OUTPUT:  {outputs}")
+        print(f"{'='*57}\n")
 
 
+logger_cb = LLMLogger()
+dspy.configure(callbacks=[logger_cb])
+
 # ==============================================================================
-# Module
+# Model & Module Definitions
 # ==============================================================================
+
 class TextToSQL(dspy.Signature):
     """Convert natural language to SQL given the schema. Return only the SQL query."""
-    db_schema = dspy.InputField()
-    question = dspy.InputField()
-    sql = dspy.OutputField()
+    db_schema = dspy.InputField(desc="The Schema of the database tables")
+    question = dspy.InputField(desc="The user's question to answer")
+    sql = dspy.OutputField(desc="The executable SQL query string")
 
 class SQLModule(dspy.Module):
-    def __init__(self):
+    def __init__(self, use_cot=True):
         super().__init__()
-        self.prog = dspy.Predict(TextToSQL)
+        self.prog = dspy.ChainOfThought(TextToSQL) if use_cot else dspy.Predict(TextToSQL)
 
     def forward(self, db_schema, question):
         return self.prog(db_schema=db_schema, question=question)
 
 # ==============================================================================
-# Metric
+# Metric & Evaluation
 # ==============================================================================
 
-def metric(example, prediction, trace=None):
-    """Evaluate prediction using shared utility functions"""
+def sql_metric(example, prediction, trace=None):
+    """DSPy metric for optimization."""
     if not hasattr(prediction, 'sql') or not prediction.sql:
         return 0.0
     
-    # Clean the generated SQL using shared utility
     pred_sql = extract_sql_from_text(prediction.sql)
-    
-    # Execute both queries using shared utilities
     db_path = get_db_path(example.db_id)
     
-    gold_success, gold_error, gold_results = execute_sql(example.sql, db_path)
-    pred_success, pred_error, pred_results = execute_sql(pred_sql, db_path)
+    gold_success, _, gold_results = execute_sql(example.sql, db_path)
+    pred_success, _, pred_results = execute_sql(pred_sql, db_path)
     
     if not gold_success or not pred_success:
-        #print("❌ Execution failed")
         return 0.0
     
-    # Compare using shared utility
-    results_match, feedback = compare_results(pred_results, gold_results)
-    
-    if results_match:
-        #print("✅ Match!")
-        return 1.0
-    else:
-        #print("❌ Mismatch")
-        return 0.0
+    match, _ = compare_results(pred_results, gold_results)
+    return 1.0 if match else 0.0
 
-# ==============================================================================
-# Data
-# ==============================================================================
-
-
-def convert_to_dspy(dataset_split):
-    """
-    Just converts a dataset list/split to DSPy examples.
-    No shuffling, no limiting. We do that beforehand.
-    """
-    examples = []
-    for item in dataset_split:
-        db_id = item['db_id']
-        schema = SCHEMAS.get(db_id, f"Database: {db_id}")
-        
-        examples.append(dspy.Example(
-            db_schema=schema,
-            question=item['question'],
-            sql=item['sql'],
-            db_id=db_id
-        ).with_inputs('db_schema', 'question'))
-    return examples
-
-
-def generate_optimization_report(baseline_results, baseline_metrics, baseline_complexity,
-                                 optimized_results, optimized_metrics, optimized_complexity,
-                                 output_dir="results/dspy_optimized_teacher_lm"):
-    """Generate comprehensive optimization report"""
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Save results
-    save_evaluation_results(baseline_results, output_dir, prefix="baseline_results")
-    save_evaluation_results(optimized_results, output_dir, prefix="optimized_results")
-    
-    # Save summaries
-    save_evaluation_summary(baseline_metrics, output_dir, 
-                           additional_data={"complexity_metrics": dict(baseline_complexity)})
-    
-    # Build comparison sections
-    comparison_table = """| Metric | Baseline | Optimized | Improvement |
-|--------|----------|-----------|-------------|
-"""
-    
-    comparison_table += f"| Valid SQL | {baseline_metrics['valid_sql_pct']:.1f}% | {optimized_metrics['valid_sql_pct']:.1f}% | "
-    comparison_table += f"{optimized_metrics['valid_sql_pct'] - baseline_metrics['valid_sql_pct']:+.1f}% |\n"
-    
-    comparison_table += f"| Results Match | {baseline_metrics['result_match_pct']:.1f}% | {optimized_metrics['result_match_pct']:.1f}% | "
-    comparison_table += f"{optimized_metrics['result_match_pct'] - baseline_metrics['result_match_pct']:+.1f}% |\n"
-    
-    comparison_table += f"| Total Examples | {baseline_metrics['total_examples']} | {optimized_metrics['total_examples']} | - |\n"
-    
-    # Complexity breakdown
-    complexity_section = "### Baseline (Before Optimization)\n\n"
-    for category, stats in sorted(baseline_complexity.items()):
-        if stats['total'] > 0:
-            complexity_section += f"**{category.upper().replace('_', ' ')}**: "
-            complexity_section += f"Valid: {stats['valid']}/{stats['total']} ({100*stats['valid']/stats['total']:.1f}%), "
-            complexity_section += f"Match: {stats['matched']}/{stats['total']} ({100*stats['matched']/stats['total']:.1f}%)\n\n"
-    
-    complexity_section += "\n### Optimized (After Optimization)\n\n"
-    for category, stats in sorted(optimized_complexity.items()):
-        if stats['total'] > 0:
-            complexity_section += f"**{category.upper().replace('_', ' ')}**: "
-            complexity_section += f"Valid: {stats['valid']}/{stats['total']} ({100*stats['valid']/stats['total']:.1f}%), "
-            complexity_section += f"Match: {stats['matched']}/{stats['total']} ({100*stats['matched']/stats['total']:.1f}%)\n\n"
-    
-    # Generate report
-    sections = {
-        "Performance Comparison": comparison_table,
-        "Performance by SQL Complexity": complexity_section,
-        "Notes": """- **Baseline**: Zero-shot predictions without optimization
-- **Optimized**: After DSPy BootstrapFewShot optimization
-- **Metric**: Result match percentage (execution results identical to gold standard)
-- **Optimization**: Uses few-shot examples selected automatically by DSPy"""
-    }
-    
-    report_path = generate_markdown_report(
-        metrics={},
-        output_dir=output_dir,
-        title="DSPy Optimization Results",
-        model_name="CodeLlama-7B-Instruct (via vLLM)",
-        dataset_name="Spider (Train subset for optimization, Dev for evaluation)",
-        additional_sections=sections
-    )
-    
-    logger.info(f"\nOptimization report saved to: {report_path}")
-    return report_path
-
-
-def load_data():
-    # Load the raw dataset
-    full_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
-    dev_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
-
-    # SHUFFLE ONCE GLOBALLY
-    # This ensures the order is fixed before we start slicing
-    shuffled_data = full_data.shuffle(seed=42)
-
-    # Create disjoint slices using indices
-    # Train: 0 to 2000
-    train_slice = shuffled_data.select(range(0, 3000))
-    
-    # Opt Val: 2000 to 2100 (Guaranteed to be different from 0-2000)
-    val_slice = shuffled_data.select(range(3000, 5000))
-
-    print(f"Split sizes -> Train: {len(train_slice)}, Val: {len(val_slice)}")
-
-    # Convert to DSPy
-    trainset = convert_to_dspy(train_slice)
-    valset = convert_to_dspy(val_slice)
-    devset = convert_to_dspy(dev_data) # Keep dev set full
-
-    return trainset, valset, devset
-
-    
-
-def evaluate(module, devset, print_every=10):
-    """Evaluate module with detailed metrics and complexity tracking"""
-    from collections import defaultdict
-    
+def evaluate_module(module, devset, desc="Evaluating"):
+    """Comprehensive evaluation with complexity tracking."""
     results = []
     complexity_metrics = defaultdict(lambda: {'total': 0, 'valid': 0, 'matched': 0})
     
-    for i, example in enumerate(tqdm(devset, desc="Evaluating")):
+    for example in tqdm(devset, desc=desc):
         prediction = module(db_schema=example.db_schema, question=example.question)
-        
-        # Extract SQL
         pred_sql = extract_sql_from_text(prediction.sql) if hasattr(prediction, 'sql') and prediction.sql else ""
         
-        # Execute and compare
         db_path = get_db_path(example.db_id)
-        gold_success, gold_error, gold_results = execute_sql(example.sql, db_path)
-        pred_success, pred_error, pred_results = execute_sql(pred_sql, db_path)
+        gold_success, _, gold_results = execute_sql(example.sql, db_path)
+        pred_success, _, pred_results = execute_sql(pred_sql, db_path)
         
         results_match = False
         if gold_success and pred_success:
             results_match, _ = compare_results(pred_results, gold_results)
         
-        # Categorize complexity
-        complexity_categories = categorize_sql_complexity(example.sql)
+        categories = categorize_sql_complexity(example.sql)
         
-        # Store result
-        result = {
+        results.append({
             "question": example.question,
             "db_id": example.db_id,
             "generated_sql": pred_sql,
             "gold_sql": example.sql,
             "is_valid": pred_success,
             "results_match": results_match,
-            "complexity": complexity_categories
-        }
-        results.append(result)
+            "complexity": categories
+        })
         
-        # Update complexity metrics
-        for category in complexity_categories:
-            complexity_metrics[category]['total'] += 1
-            if pred_success:
-                complexity_metrics[category]['valid'] += 1
-            if results_match:
-                complexity_metrics[category]['matched'] += 1
-        
-        # Print progress
-        if (i + 1) % print_every == 0:
-            matched = sum(1 for r in results if r['results_match'])
-            valid = sum(1 for r in results if r['is_valid'])
-            print(f"\nProgress: Valid {valid}/{len(results)} ({100*valid/len(results):.1f}%), Match {matched}/{len(results)} ({100*matched/len(results):.1f}%)")
-    
-    # Calculate overall metrics
-    metrics = calculate_metrics(results)
-    
-    return results, metrics, complexity_metrics
-
+        for cat in categories:
+            complexity_metrics[cat]['total'] += 1
+            if pred_success: complexity_metrics[cat]['valid'] += 1
+            if results_match: complexity_metrics[cat]['matched'] += 1
+            
+    return results, calculate_metrics(results), complexity_metrics
 
 # ==============================================================================
-# Main
+# Optimization Runner
 # ==============================================================================
+
+def get_optimizer(name, **kwargs):
+    """Factory for DSPy optimizers."""
+    if name == "BootstrapFewShot":
+        return dspy.teleprompt.BootstrapFewShot(metric=sql_metric, **kwargs)
+    elif name == "BootstrapFewShotWithRandomSearch":
+        return dspy.teleprompt.BootstrapFewShotWithRandomSearch(metric=sql_metric, **kwargs)
+    elif name == "MIPRO":
+        return dspy.teleprompt.MIPROv2(metric=sql_metric, **kwargs)
+    else:
+        raise ValueError(f"Unknown optimizer: {name}")
+
+def setup_lms(args):
+    """Initialize Student and Teacher LMs based on CLI args."""
+    # Student LM
+    student_lm = dspy.LM(
+        model=args.student_model,
+        api_base=args.api_base,
+        api_key=args.api_key,
+        max_tokens=args.max_tokens,
+        temperature=0.0
+    )
+    dspy.configure(lm=student_lm)
+    
+    teacher_lm = None
+    if args.use_teacher:
+        load_dotenv(find_dotenv())
+        teacher_key = os.getenv("NVIDIA_API_KEY") or args.api_key
+        teacher_lm = dspy.LM(
+            model=args.teacher_model,
+            api_key=teacher_key,
+            api_base="https://integrate.api.nvidia.com/v1",
+            temperature=0.7
+        )
+    return student_lm, teacher_lm
+
+# ==============================================================================
+# Data Loading
+# ==============================================================================
+
+def load_and_prep_data(train_size=3000, val_size=2000):
+    full_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
+    dev_raw = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
+    
+    shuffled = full_data.shuffle(seed=42)
+    
+    def to_dspy(subset):
+        return [dspy.Example(
+            db_schema=SCHEMAS.get(i['db_id'], f"Database: {i['db_id']}"),
+            question=i['question'], sql=i['sql'], db_id=i['db_id']
+        ).with_inputs('db_schema', 'question') for i in subset]
+
+    trainset = to_dspy(shuffled.select(range(0, train_size)))
+    valset = to_dspy(shuffled.select(range(train_size, train_size + val_size)))
+    devset = to_dspy(dev_raw)
+    
+    return trainset, valset, devset
+
+# ==============================================================================
+# Main Execution
+# ==============================================================================
+
 def main():
-    logger.info("Loading schemas...")
-    logger.info(f"Loaded {len(SCHEMAS)} database schemas")
+    parser = argparse.ArgumentParser(description="DSPy NL2SQL Optimizer")
+    parser.add_argument("--student_model", type=str, default="openai/TheBloke/CodeLlama-7B-Instruct-AWQ")
+    parser.add_argument("--api_base", type=str, default="http://localhost:8000/v1")
+    parser.add_argument("--api_key", type=str, default="dummy")
+    parser.add_argument("--max_tokens", type=int, default=1024)
+    parser.add_argument("--optimizer", type=str, default="BootstrapFewShotWithRandomSearch")
+    parser.add_argument("--use_cot", action="store_true", default=True)
+    parser.add_argument("--use_teacher", action="store_true")
+    parser.add_argument("--teacher_model", type=str, default="moonshotai/kimi-k2-thinking")
+    parser.add_argument("--output_dir", type=str, default="results/dspy_optimized_run")
+    args = parser.parse_args()
+
+    #  Setup
+    student_lm, teacher_lm = setup_lms(args)
+    trainset, valset, devset = load_and_prep_data()
     
-    logger.info("Loading data...")
-    trainset, valset, devset = load_data()
-    logger.info(f"Loaded {len(trainset)} train, {len(valset)} val, {len(devset)} test")
-    
-    # Evaluate baseline (before optimization)
-    logger.info("\n" + "="*80)
-    logger.info("EVALUATING BASELINE (Before Optimization)")
-    logger.info("="*80)
-    baseline = SQLModule()
-    baseline_results, baseline_metrics, baseline_complexity = evaluate(baseline, devset)
-    
-    logger.info(f"\nBaseline Results:")
-    logger.info(f"  Valid SQL: {baseline_metrics['valid_sql_count']}/{baseline_metrics['total_examples']} ({baseline_metrics['valid_sql_pct']:.1f}%)")
-    logger.info(f"  Results Match: {baseline_metrics['result_match_count']}/{baseline_metrics['total_examples']} ({baseline_metrics['result_match_pct']:.1f}%)")
-    
-    # Run optimization
-    logger.info("\n" + "="*80)
-    logger.info("RUNNING OPTIMIZATION")
-    logger.info("="*80)
-    optimizer = BootstrapFewShotWithRandomSearch(
-        metric=metric,
-        max_bootstrapped_demos=1,
-        max_labeled_demos=0,
-        max_rounds=1,
+    #  Baseline
+    logger.info("Running Baseline Evaluation...")
+    baseline = SQLModule(use_cot=args.use_cot)
+    b_res, b_metrics, b_complexity = evaluate_module(baseline, devset, "Baseline")
+
+    #  Optimization
+    logger.info(f"Starting Optimization with {args.optimizer}...")
+    optimizer = get_optimizer(
+        args.optimizer, 
+        max_bootstrapped_demos=2, 
+        max_labeled_demos=2, 
         num_candidate_programs=5
     )
-    opt_valset = valset[:50]
+    
+    teacher_module = None
+    if args.use_teacher and teacher_lm:
+        teacher_module = SQLModule(use_cot=True)
+        for p in teacher_module.predictors():
+            p.lm = teacher_lm
 
-
-    teacher_module = SQLModule()
-
-    # Force the teacher module to use the Moonshot LM
-    # We iterate through the predictors (dspy.Predict) and override their LM
-    for p in teacher_module.predictors():
-        p.lm = teacher_lm
-        
-    # 3. Compile passing the teacher MODULE, not the LM
     compiled = optimizer.compile(
-        student=SQLModule(),       # The student uses the default LM (CodeLlama)
-        teacher=teacher_module,    # The teacher uses the overridden LM (Moonshot)
-        trainset=trainset, 
-        valset=opt_valset
+        student=SQLModule(use_cot=args.use_cot),
+        teacher=teacher_module,
+        trainset=trainset,
+        valset=valset
+    )
+
+    # Final Evaluation
+    logger.info("Running Optimized Evaluation...")
+    o_res, o_metrics, o_complexity = evaluate_module(compiled, devset, "Optimized")
+
+    #  Reporting & Saving
+    os.makedirs(args.output_dir, exist_ok=True)
+    compiled.save(os.path.join(args.output_dir, "model.json"))
+    
+    # Use utility function for the final MD report
+    generate_markdown_report(
+        metrics=o_metrics,
+        output_dir=args.output_dir,
+        title=f"Optimization: {args.optimizer}",
+        model_name=args.student_model,
+        dataset_name="Spider Cleaned"
     )
     
-    # Evaluate optimized model (after optimization)
-    logger.info("\n" + "="*80)
-    logger.info("EVALUATING OPTIMIZED MODEL (After Optimization)")
-    logger.info("="*80)
-    optimized_results, optimized_metrics, optimized_complexity = evaluate(compiled, devset)
-    
-    logger.info(f"\nOptimized Results:")
-    logger.info(f"  Valid SQL: {optimized_metrics['valid_sql_count']}/{optimized_metrics['total_examples']} ({optimized_metrics['valid_sql_pct']:.1f}%)")
-    logger.info(f"  Results Match: {optimized_metrics['result_match_count']}/{optimized_metrics['total_examples']} ({optimized_metrics['result_match_pct']:.1f}%)")
-    
-    # Print final comparison
-    logger.info("\n" + "="*80)
-    logger.info("FINAL COMPARISON")
-    logger.info("="*80)
-    logger.info(f"Valid SQL:      {baseline_metrics['valid_sql_pct']:.1f}% → {optimized_metrics['valid_sql_pct']:.1f}% ({optimized_metrics['valid_sql_pct'] - baseline_metrics['valid_sql_pct']:+.1f}%)")
-    logger.info(f"Results Match:  {baseline_metrics['result_match_pct']:.1f}% → {optimized_metrics['result_match_pct']:.1f}% ({optimized_metrics['result_match_pct'] - baseline_metrics['result_match_pct']:+.1f}%)")
-    logger.info("="*80)
-    
-    # Save optimized model
-    logger.info("\nSaving optimized model...")
-    os.makedirs("models/dspy_optimized", exist_ok=True)
-    compiled.save("models/dspy_optimized/nl2sql.json")
-    logger.info("Model saved to: models/dspy_optimized/nl2sql.json")
-    
-    # Generate comprehensive report
-    logger.info("\nGenerating optimization report...")
-    generate_optimization_report(
-        baseline_results, baseline_metrics, baseline_complexity,
-        optimized_results, optimized_metrics, optimized_complexity
-    )
-    
-    logger.info("\n Optimization complete!")
-    
+    logger.info(f"Optimization Complete. Improvement: {o_metrics['result_match_pct'] - b_metrics['result_match_pct']:+.2f}%")
 
 if __name__ == "__main__":
     main()
