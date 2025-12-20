@@ -33,7 +33,7 @@ class LLMLogger:
     def on_lm_start(self, role: str, model: str, prompt: str):
         print(f"\n{'='*20} [{role.upper()} CALL START] {'='*20}")
         print(f"MODEL: {model}")
-        print(f"PROMPT SNIPPET: {str(prompt)[:300]}...\n")
+        print(f"PROMPT SNIPPET: {str(prompt)}\n")
 
     def on_lm_end(self, role: str, output: str):
         print(f"\n{'-'*20} [{role.upper()} CALL END] {'-'*20}")
