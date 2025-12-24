@@ -34,16 +34,18 @@ source .venv/bin/activate
 Evaluate 3 baseline approaches on Spider dev set (1,034 examples):
 
 ```bash
-# 1. Start vLLM server (CodeLlama-7B with AWQ quantization)
+#  Start vLLM server (CodeLlama-7B with AWQ quantization)
+## you can reduce context size if not optmizing for fewshot and corresponding gpu utilization e.g context size 2048 with gpu usage of 0.4
 vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
     --host 0.0.0.0 \
     --port 8000 \
     --quantization awq \
-    --gpu-memory-utilization 0.4 \
-    --max-model-len 3048 \
+    --gpu-memory-utilization 0.8 \
+    --max-model-len 8048 \
     --chat-template models/codellama_chat.jinja
+    
 
-# 2. Run evaluation (in another terminal)
+#  Run evaluation (in another terminal)
 python src/nl2sql/eval/baseline.py --num-samples 100  # Quick test
 python src/nl2sql/eval/baseline.py                    # Full evaluation
 ```

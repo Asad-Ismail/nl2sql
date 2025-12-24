@@ -203,7 +203,7 @@ def main():
     parser.add_argument("--student_model", type=str, default="openai/TheBloke/CodeLlama-7B-Instruct-AWQ")
     parser.add_argument("--api_base", type=str, default="http://localhost:8000/v1")
     parser.add_argument("--api_key", type=str, default="dummy")
-    parser.add_argument("--max_tokens", type=int, default=1024)
+    parser.add_argument("--max_tokens", type=int, default=512)
     parser.add_argument("--optimizer", type=str, default="BootstrapFewShotWithRandomSearch")
     parser.add_argument("--use_cot", action="store_true", default=True)
     parser.add_argument("--use_teacher", action="store_true")

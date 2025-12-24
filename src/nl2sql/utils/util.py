@@ -450,6 +450,7 @@ def save_evaluation_summary(metrics: Dict, output_dir: str,
 
 def generate_markdown_report(metrics: Dict[str, Any], 
                             output_dir: str,
+                            filename: str = "evaluation_report.md",
                             title: str = "Evaluation Results",
                             model_name: str = "",
                             dataset_name: str = "",
@@ -510,7 +511,7 @@ def generate_markdown_report(metrics: Dict[str, Any],
             report += section_content + "\n"
     
     # Save report
-    report_path = output_path / "evaluation_report.md"
+    report_path = output_path / filename
     with open(report_path, "w") as f:
         f.write(report)
     

@@ -11,6 +11,7 @@ from openai import OpenAI
 from tqdm import tqdm
 from datasets import load_dataset
 from dotenv import load_dotenv, find_dotenv
+from ratelimit import limits, sleep_and_retry
 
 # Shared utility imports
 from nl2sql.utils.util import (
@@ -47,38 +48,45 @@ llm_logger = LLMLogger()
 
 class TaskEngine:
     def __init__(self, model, base_url):
-        self.client = OpenAI(base_url=base_url, api_key="dummy")
+        self.client = OpenAI(base_url=base_url, api_key="dummy",timeout=300.0)
         self.model = model
 
     def __call__(self, prompt: str, system_prompt: str) -> str:
-        llm_logger.on_lm_start("student", self.model, f"System: {system_prompt}\nUser: {prompt}")
+        #llm_logger.on_lm_start("student", self.model, f"System: {system_prompt}\nUser: {prompt}")
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.0
+            temperature=0.0,
+            max_tokens=250,
+            stop=["Explanation:", "Note:", "To find"]
         )
         content = response.choices[0].message.content
-        llm_logger.on_lm_end("student", content)
+        if not content:
+            content = "SELECT 'Empty Response Error';"
+        #llm_logger.on_lm_end("student", content)
         return content
 
 class NVIDIAGradientEngine:
     """Stable wrapper for NVIDIA/Teacher API for TextGrad."""
+    
     def __init__(self, model, api_key):
-        self.client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key)
+        self.client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key,timeout=300.0)
         self.model = model
-
+        
+    @sleep_and_retry
+    @limits(calls=38, period=60)
     def __call__(self, prompt: str, **kwargs) -> str:
-        llm_logger.on_lm_start("teacher", self.model, prompt)
+        #llm_logger.on_lm_start("teacher", self.model, prompt)
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
         content = response.choices[0].message.content
-        llm_logger.on_lm_end("teacher", content)
+        #llm_logger.on_lm_end("teacher", content)
         return content
 
 class SQLModule(tg.Variable):
@@ -119,8 +127,8 @@ def evaluate(model, dataset, desc="Evaluating"):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_train", type=int, default=30)
-    parser.add_argument("--num_val", type=int, default=20)
+    parser.add_argument("--num_train", type=int, default=800)
+    parser.add_argument("--num_val", type=int, default=100)
     parser.add_argument("--student_model", type=str, default="TheBloke/CodeLlama-7B-Instruct-AWQ")
     parser.add_argument("--eval_model", type=str, default="meta/llama-3.1-70b-instruct")
     parser.add_argument("--api_base", type=str, default="http://localhost:8000/v1")
@@ -132,7 +140,7 @@ def main():
     load_dotenv(find_dotenv())
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 1. Load Data
+    #  Load Data
     logger.info("Loading Datasets...")
     full_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
     dev_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
@@ -142,12 +150,12 @@ def main():
     val_set = [x for x in shuffled.select(range(args.num_train, args.num_train + args.num_val))]
     test_set = [x for x in dev_data]
 
-    # 2. Setup Engines
+    #  Setup Engines
     task_engine = TaskEngine(args.student_model, args.api_base)
     eval_engine = NVIDIAGradientEngine(args.eval_model, os.getenv("NVIDIA_API_KEY"))
     tg.set_backward_engine(eval_engine)
 
-    # 3. Variables & Optimizer
+    #  Variables & Optimizer
     initial_prompt = "Convert natural language to SQL. Output only the query."
     system_prompt = tg.Variable(initial_prompt, requires_grad=True, role_description="system prompt")
     model = SQLModule(system_prompt, task_engine)
@@ -159,6 +167,10 @@ def main():
     3. If 'Execution Match' is False, identify exactly what logic in the Student's SQL caused the mismatch.
     4. Provide feedback on how to update the 'System Prompt' to ensure the student follows the Gold SQL's logic exactly.""")
 
+
+    initial_metrics = evaluate(model, test_set, desc="Baseline Eval")
+    generate_markdown_report(metrics=initial_metrics, output_dir=args.output_dir,filename="initial_report.md", title="Baseline Results")
+    
     best_val_acc = 0.0
     best_prompt = initial_prompt
 
@@ -205,7 +217,7 @@ def main():
     prompt_file.write_text(best_prompt)
     logger.info(f"Best prompt saved to {prompt_file}")
     final_metrics = evaluate(model, test_set, desc="Final Test")
-    generate_markdown_report(metrics=final_metrics, output_dir=args.output_dir, title="TextGrad SQL Results")
+    generate_markdown_report(metrics=final_metrics, output_dir=args.output_dir,filename="final_optimized_report.md", title="TextGrad Results")
 
 if __name__ == "__main__":
     main()
