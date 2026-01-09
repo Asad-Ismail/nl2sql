@@ -109,7 +109,12 @@ class OptimizerConfig(BaseModel):
     """Optimizer configuration."""
 
     name: Literal[
-        "BootstrapFewShot", "BootstrapFewShotWithRandomSearch", "MIPRO"
+        "BootstrapFewShot",
+        "BootstrapFewShotWithRandomSearch",
+        "MIPRO",
+        "LabeledFewShot",
+        "KNNFewShot",
+        "COPRO",
     ] = "BootstrapFewShotWithRandomSearch"
     params: Dict[str, Any] = Field(
         default_factory=lambda: {

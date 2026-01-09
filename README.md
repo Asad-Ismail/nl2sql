@@ -60,15 +60,29 @@ Optimize prompts using DSPy optimizers with YAML configuration:
 # Run with default config (BootstrapFewShotWithRandomSearch)
 python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/default.yaml
 
-# Run with MIPRO optimizer
+# Run with MIPRO optimizer (Bayesian optimization)
 python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/mipro.yaml
+
+# Run with KNN few-shot (selects similar examples per query)
+python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/knn_fewshot.yaml
+
+# Run with COPRO (coordinate ascent for instructions)
+python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/copro.yaml
 
 # Override config via CLI
 python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/default.yaml \
     --optimizer MIPRO --train_size 1000 --output_dir results/mipro_run
 ```
 
-Available optimizers: `BootstrapFewShot`, `BootstrapFewShotWithRandomSearch`, `MIPRO`
+**Available optimizers:**
+| Optimizer | Description | Best For |
+|-----------|-------------|----------|
+| `LabeledFewShot` | Simple k random examples | Quick baseline |
+| `BootstrapFewShot` | Teacher-generated demos | Small datasets |
+| `BootstrapFewShotWithRandomSearch` | Random search over demos | General use |
+| `KNNFewShot` | k-Nearest Neighbors per query | Diverse SQL patterns |
+| `COPRO` | Coordinate ascent for instructions | Instruction tuning |
+| `MIPRO` | Bayesian optimization | Best quality |
 
 Results saved to `results/dspy_optimized/` with model and reports.
 

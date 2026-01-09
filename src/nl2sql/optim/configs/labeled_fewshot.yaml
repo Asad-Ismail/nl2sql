@@ -1,0 +1,5 @@
+optimizer:
+  name: "LabeledFewShot"
+  params:
+    k: 8
+    sample: true

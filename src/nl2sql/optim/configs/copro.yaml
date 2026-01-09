@@ -1,0 +1,9 @@
+optimizer:
+  name: "COPRO"
+  params:
+    breadth: 10
+    depth: 3
+    init_temperature: 1.4
+    track_stats: true
+    num_threads: 4
+    display_progress: true
