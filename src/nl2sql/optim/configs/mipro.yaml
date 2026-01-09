@@ -1,0 +1,9 @@
+optimizer:
+  name: "MIPRO"
+  params:
+    max_bootstrapped_demos: 3
+    max_labeled_demos: 3
+    num_candidates: 10
+    init_temperature: 1.0
+    verbose: false
+    track_stats: true

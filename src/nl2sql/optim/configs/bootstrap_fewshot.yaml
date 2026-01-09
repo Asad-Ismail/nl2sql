@@ -1,0 +1,6 @@
+optimizer:
+  name: "BootstrapFewShot"
+  params:
+    max_bootstrapped_demos: 4
+    max_labeled_demos: 4
+    max_rounds: 1

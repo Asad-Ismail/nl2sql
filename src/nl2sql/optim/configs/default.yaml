@@ -1,0 +1,50 @@
+experiment:
+  name: "dspy-nl2sql"
+  description: "DSPy optimization for Text-to-SQL"
+  seed: 42
+  output_dir: "results/dspy_optimized"
+
+data:
+  dataset:
+    name: "AsadIsmail/nl2sql-deduplicated"
+    train_file: "spider_clean.jsonl"
+    dev_file: "spider_dev_clean.jsonl"
+  splits:
+    train_size: 3000
+    val_size: 2000
+  preprocessing:
+    shuffle: true
+    seed: 42
+
+models:
+  student:
+    name: "openai/TheBloke/CodeLlama-7B-Instruct-AWQ"
+    api_base: "http://localhost:8000/v1"
+    api_key: "dummy"
+    max_tokens: 512
+    temperature: 0.0
+  teacher:
+    enabled: false
+    name: "moonshotai/kimi-k2-thinking"
+    api_base: "https://integrate.api.nvidia.com/v1"
+    api_key: "${NVIDIA_API_KEY}"
+    temperature: 0.7
+
+module:
+  use_cot: true
+
+optimizer:
+  name: "BootstrapFewShotWithRandomSearch"
+  params:
+    max_bootstrapped_demos: 2
+    max_labeled_demos: 2
+    num_candidate_programs: 5
+    num_threads: 4
+
+evaluation:
+  run_baseline: true
+  save_intermediate: false
+
+logging:
+  level: "INFO"
+  enable_llm_logger: true

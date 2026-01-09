@@ -115,10 +115,14 @@ def evaluate(model, dataset, desc="Evaluating"):
         prediction = model.forward(prompt)
         pred_sql = extract_sql_from_text(prediction.value)
         db_path = get_db_path(ex['db_id'])
-        success, _, res = execute_sql(pred_sql, db_path)
-        _, _, gold_res = execute_sql(ex['sql'], db_path)
-        match, _ = compare_results(res, gold_res)
-        results.append({"is_valid": success, "results_match": match})
+        pred_success, _, pred_res = execute_sql(pred_sql, db_path)
+        gold_success, _, gold_res = execute_sql(ex['sql'], db_path)
+
+        match = False
+        if gold_success and pred_success:
+            match, _ = compare_results(pred_res, gold_res)
+
+        results.append({"is_valid": pred_success, "results_match": match})
     return calculate_metrics(results)
 
 # ==============================================================================
@@ -170,9 +174,12 @@ def main():
 
     initial_metrics = evaluate(model, test_set, desc="Baseline Eval")
     generate_markdown_report(metrics=initial_metrics, output_dir=args.output_dir,filename="initial_report.md", title="Baseline Results")
-    
-    best_val_acc = 0.0
+
+    # Initialize best accuracy with baseline validation performance
+    baseline_val_metrics = evaluate(model, val_set, desc="Baseline Val")
+    best_val_acc = baseline_val_metrics['result_match_pct']
     best_prompt = initial_prompt
+    logger.info(f"Baseline validation accuracy: {best_val_acc:.2f}%")
 
     # 4. Optimization Loop
     for epoch in range(args.epochs):
@@ -188,11 +195,15 @@ def main():
                 schema = SCHEMAS.get(ex['db_id'], "")
                 prediction = model.forward(f"Schema:\n{schema}\nQuestion: {ex['question']}")
                 pred_sql = extract_sql_from_text(prediction.value)
-                
-                # Execution Evidence
-                success, error, res = execute_sql(pred_sql, get_db_path(ex['db_id']))
-                match, _ = compare_results(res, execute_sql(ex['sql'], get_db_path(ex['db_id']))[2])
-                
+
+                db_path = get_db_path(ex['db_id'])
+                pred_success, error, pred_res = execute_sql(pred_sql, db_path)
+                gold_success, _, gold_res = execute_sql(ex['sql'], db_path)
+
+                match = False
+                if gold_success and pred_success:
+                    match, _ = compare_results(pred_res, gold_res)
+
                 evidence = f"Pred: {pred_sql}\nGold: {ex['sql']}\nMatch: {match}\nError: {error}"
                 loss_input = tg.Variable(evidence, predecessors=[prediction], role_description="outcome")
                 losses.append(loss_fn(loss_input))
@@ -202,13 +213,13 @@ def main():
 
         # Checkpoint Revert Logic
         val_metrics = evaluate(model, val_set, desc="Val Check")
-        if val_metrics['result_match_pct'] >= best_val_acc:
+        if val_metrics['result_match_pct'] > best_val_acc:
             best_val_acc = val_metrics['result_match_pct']
             best_prompt = copy.deepcopy(system_prompt.value)
-            logger.info(f"Performance improved! Accuracy: {best_val_acc}%")
-            logger.info(f"Best Prompt so far: {system_prompt}%")
+            logger.info(f"Performance improved! Accuracy: {best_val_acc:.2f}%")
+            logger.info(f"Best Prompt so far: {best_prompt}")
         else:
-            logger.warning(f"Accuracy dropped to {val_metrics['result_match_pct']}%. Reverting.")
+            logger.warning(f"Accuracy dropped to {val_metrics['result_match_pct']:.2f}%. Reverting.")
             system_prompt.set_value(best_prompt)
 
     #  Final Report
