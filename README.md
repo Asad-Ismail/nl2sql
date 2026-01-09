@@ -164,6 +164,39 @@ python src/nl2sql/data/prepare_unsloth_data.py
 
 Standard SQL only (SQLite/PostgreSQL/MySQL) - no dialect-specific extensions.
 
+## LLM Provider System
+
+Unified provider system supports multiple LLM backends with configurable rate limiting:
+
+```python
+from nl2sql.llm import get_llm
+
+# Use local vLLM
+llm = get_llm("codellama_7b")
+response = llm.generate_text("Convert to SQL: show all users")
+
+# Switch to Claude
+llm = get_llm("claude_sonnet")
+
+# Use with DSPy
+from nl2sql.llm.dspy_adapter import configure_dspy_from_config
+student_lm, teacher_lm = configure_dspy_from_config(
+    student_model="codellama_7b",
+    teacher_model="llama_70b_nvidia"
+)
+```
+
+**Supported Providers:**
+| Provider | Type | Models |
+|----------|------|--------|
+| vLLM (local) | OpenAI-compatible | CodeLlama, DeepSeek, Mistral |
+| NVIDIA NIM | OpenAI-compatible | Llama 70B/405B, Kimi K2 |
+| Anthropic | Native SDK | Claude Sonnet/Haiku/Opus |
+| OpenRouter | OpenAI-compatible | Any model on OpenRouter |
+| OpenAI | Native | GPT-4o, GPT-4o-mini |
+
+Configure in `src/nl2sql/optim/configs/llm/providers.yaml`.
+
 ## Project Structure
 
 ```
@@ -172,9 +205,12 @@ nl2sql/
 │   ├── data/          # Dataset download and preprocessing
 │   ├── train/         # Training scripts (Unsloth/LoRA)
 │   ├── eval/          # Evaluation (baseline, SFT)
+│   ├── llm/           # Unified LLM provider system
+│   │   ├── config.py  # Provider config schemas
+│   │   ├── factory.py # Provider factory with rate limiting
+│   │   └── dspy_adapter.py  # DSPy integration
 │   ├── optim/         # DSPy and TextGrad optimization
 │   │   ├── configs/   # YAML configuration files
-│   │   ├── config.py  # Pydantic config schema
 │   │   └── optimizers.py  # Optimizer registry
 │   └── utils/         # Shared utilities (SQL execution, metrics)
 ├── models/            # Tokenizer configs and chat templates

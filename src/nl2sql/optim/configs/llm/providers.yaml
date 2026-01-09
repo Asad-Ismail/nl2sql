@@ -1,0 +1,141 @@
+# LLM Provider Configuration
+# This file defines available providers and models for the NL2SQL project
+
+providers:
+  # Local vLLM server for student models
+  vllm_local:
+    type: openai
+    api_base: "http://localhost:8000/v1"
+    api_key: "dummy"
+    timeout: 300.0
+    rate_limit:
+      calls_per_minute: 120
+      burst_limit: 20
+    default_params:
+      temperature: 0.0
+      max_tokens: 512
+      top_p: 1.0
+
+  # NVIDIA NIM API for teacher models
+  nvidia:
+    type: openai
+    api_base: "https://integrate.api.nvidia.com/v1"
+    api_key: "${NVIDIA_API_KEY}"
+    timeout: 300.0
+    rate_limit:
+      calls_per_minute: 38
+      burst_limit: 5
+    default_params:
+      temperature: 0.7
+      max_tokens: 1024
+
+  # Direct Anthropic API
+  anthropic:
+    type: anthropic
+    api_key: "${ANTHROPIC_API_KEY}"
+    timeout: 120.0
+    rate_limit:
+      calls_per_minute: 50
+      burst_limit: 10
+    default_params:
+      temperature: 0.0
+      max_tokens: 512
+
+  # OpenRouter multi-model gateway
+  openrouter:
+    type: openai
+    api_base: "https://openrouter.ai/api/v1"
+    api_key: "${OPENROUTER_API_KEY}"
+    timeout: 120.0
+    rate_limit:
+      calls_per_minute: 60
+      burst_limit: 10
+    default_params:
+      temperature: 0.0
+      max_tokens: 512
+    extra_headers:
+      HTTP-Referer: "https://github.com/Asad-Ismail/nl2sql"
+      X-Title: "NL2SQL"
+
+  # Direct OpenAI API
+  openai:
+    type: openai
+    api_key: "${OPENAI_API_KEY}"
+    timeout: 120.0
+    rate_limit:
+      calls_per_minute: 60
+      burst_limit: 10
+    default_params:
+      temperature: 0.0
+      max_tokens: 512
+
+# Model definitions - reference providers above
+models:
+  # Student models (local vLLM)
+  codellama_7b:
+    provider: vllm_local
+    model: "TheBloke/CodeLlama-7B-Instruct-AWQ"
+
+  codellama_13b:
+    provider: vllm_local
+    model: "TheBloke/CodeLlama-13B-Instruct-AWQ"
+
+  deepseek_coder_7b:
+    provider: vllm_local
+    model: "deepseek-ai/deepseek-coder-7b-instruct"
+
+  mistral_7b:
+    provider: vllm_local
+    model: "TheBloke/Mistral-7B-Instruct-v0.2-AWQ"
+
+  # Teacher models (NVIDIA NIM)
+  llama_70b_nvidia:
+    provider: nvidia
+    model: "meta/llama-3.1-70b-instruct"
+
+  llama_405b_nvidia:
+    provider: nvidia
+    model: "meta/llama-3.1-405b-instruct"
+
+  kimi_k2:
+    provider: nvidia
+    model: "moonshotai/kimi-k2-thinking"
+
+  # Anthropic Claude models
+  claude_sonnet:
+    provider: anthropic
+    model: "claude-sonnet-4-20250514"
+
+  claude_haiku:
+    provider: anthropic
+    model: "claude-3-5-haiku-20241022"
+
+  claude_opus:
+    provider: anthropic
+    model: "claude-opus-4-20250514"
+
+  # OpenRouter models (alternative access)
+  claude_sonnet_openrouter:
+    provider: openrouter
+    model: "anthropic/claude-sonnet-4"
+
+  gpt4o_openrouter:
+    provider: openrouter
+    model: "openai/gpt-4o"
+
+  qwen_coder_32b:
+    provider: openrouter
+    model: "qwen/qwen-2.5-coder-32b-instruct"
+
+  deepseek_r1:
+    provider: openrouter
+    model: "deepseek/deepseek-r1"
+
+  # Direct OpenAI models
+  gpt4o:
+    provider: openai
+    model: "gpt-4o"
+
+  gpt4o_mini:
+    provider: openai
+    model: "gpt-4o-mini"
