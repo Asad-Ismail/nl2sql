@@ -11,8 +11,13 @@ NL2SQL is a Text-to-SQL research project comparing LLM-based approaches: zero-sh
 ## Common Commands
 
 ```bash
-# Setup
-uv sync && source .venv/bin/activate
+# Setup - ALWAYS install packages and activate venv first
+# Use uv to create virtual environment and install dependencies
+uv sync
+uv pip install -e .  # Install package in editable mode for proper imports
+
+# ALWAYS activate the virtual environment before running any tests or commands
+source .venv/bin/activate
 
 # Start vLLM server (required for baseline evaluation)
 vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
@@ -79,6 +84,11 @@ mypy src/
 - Model outputs: `models/`
 
 ## Critical Conventions
+
+### Environment Setup (CRITICAL)
+- **Always use `uv`** for package installation and virtual environment creation
+- **Always activate venv** before running tests, evaluation, or any commands: `source .venv/bin/activate`
+- Standard workflow: `uv sync && source .venv/bin/activate`
 
 ### SQL Dialect Consistency
 - **Standard SQL only** (SQLite/PostgreSQL/MySQL) - DuckDB excluded for PRAGMA statements

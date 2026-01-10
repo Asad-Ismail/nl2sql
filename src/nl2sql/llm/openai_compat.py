@@ -95,7 +95,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
         # Add any additional kwargs (top_p, etc.)
         top_p = kwargs.get("top_p") or self._get_param(None, "top_p")
-        if top_p is not None and top_p < 1.0:
+        if top_p and top_p < 1.0:
             request_kwargs["top_p"] = top_p
 
         # Make the API call

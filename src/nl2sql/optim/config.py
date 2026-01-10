@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from nl2sql.utils import resolve_env_vars
 
 
 class ExperimentConfig(BaseModel):
@@ -50,18 +50,6 @@ class DataConfig(BaseModel):
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
 
 
-def _resolve_env_vars(value: str) -> str:
-    """Resolve ${ENV_VAR} references in config values."""
-    if not isinstance(value, str):
-        return value
-    pattern = r"\$\{([^}]+)\}"
-    matches = re.findall(pattern, value)
-    for match in matches:
-        env_value = os.getenv(match, "")
-        value = value.replace(f"${{{match}}}", env_value)
-    return value
-
-
 class ModelConfig(BaseModel):
     """LLM configuration."""
 
@@ -73,8 +61,8 @@ class ModelConfig(BaseModel):
 
     @field_validator("api_key", "api_base", mode="before")
     @classmethod
-    def resolve_env_vars(cls, v: str) -> str:
-        return _resolve_env_vars(v)
+    def _resolve_env_vars(cls, v: str) -> str:
+        return resolve_env_vars(v)
 
 
 class TeacherConfig(BaseModel):
@@ -88,8 +76,8 @@ class TeacherConfig(BaseModel):
 
     @field_validator("api_key", "api_base", mode="before")
     @classmethod
-    def resolve_env_vars(cls, v: str) -> str:
-        return _resolve_env_vars(v)
+    def _resolve_env_vars(cls, v: str) -> str:
+        return resolve_env_vars(v)
 
 
 class ModelsConfig(BaseModel):

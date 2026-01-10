@@ -48,11 +48,10 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.5.0",
 ]
-==2025.12.5",
+train = [
+    "unsloth==2025.12.5",
     "unsloth-zoo==2025.12.4",
-    "trl==0.22.2",
-    "xformers==0.0.33.post1t+https://github.com/unslothai/unsloth-zoo.git",
-    "trl>=0.19.1,<=0.24.0",
+    "trl>=0.22.2",
     "xformers>=0.0.28",
 ]
 

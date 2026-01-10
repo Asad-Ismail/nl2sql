@@ -94,7 +94,8 @@ class AnthropicProvider(BaseLLMProvider):
         if system_content:
             request_kwargs["system"] = system_content
 
-        if temperature is not None and temperature > 0:
+        # Only set temperature if non-zero (default 0 means deterministic)
+        if temperature:
             request_kwargs["temperature"] = temperature
 
         if stop:

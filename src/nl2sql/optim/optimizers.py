@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 import dspy
 
@@ -17,13 +17,15 @@ class DSPyOptimizerWrapper(ABC):
     requires_metric: bool = True
     requires_trainset_in_init: bool = False
 
-    def __init__(self, metric: Callable | None, config: OptimizerConfig):
+    def __init__(
+        self, metric: Optional[Callable], config: OptimizerConfig
+    ) -> None:
         """
         Initialize optimizer wrapper.
 
         Parameters
         ----------
-        metric : Callable or None
+        metric : Callable, optional
             DSPy metric function for optimization (not all optimizers need it)
         config : OptimizerConfig
             Optimizer configuration
@@ -40,8 +42,8 @@ class DSPyOptimizerWrapper(ABC):
         self,
         student: dspy.Module,
         trainset: List,
-        valset: List | None = None,
-        teacher: dspy.Module | None = None,
+        valset: Optional[List] = None,
+        teacher: Optional[dspy.Module] = None,
     ) -> dspy.Module:
         """
         Run optimization and return compiled module.
@@ -137,18 +139,16 @@ class LabeledFewShotWrapper(DSPyOptimizerWrapper):
 
     requires_metric = False
 
-    def build(self, **kwargs):
+    def build(self, **kwargs) -> dspy.teleprompt.LabeledFewShot:
         params = self.config.params
-        return dspy.teleprompt.LabeledFewShot(
-            k=params.get("k", 16),
-        )
+        return dspy.teleprompt.LabeledFewShot(k=params.get("k", 16))
 
     def compile(
         self,
         student: dspy.Module,
         trainset: List,
-        valset: List | None = None,
-        teacher: dspy.Module | None = None,
+        valset: Optional[List] = None,
+        teacher: Optional[dspy.Module] = None,
     ) -> dspy.Module:
         optimizer = self.build()
         return optimizer.compile(
@@ -167,7 +167,7 @@ class BootstrapFewShotWrapper(DSPyOptimizerWrapper):
     of your program, using labeled examples.
     """
 
-    def build(self, **kwargs):
+    def build(self, **kwargs) -> dspy.teleprompt.BootstrapFewShot:
         params = self.config.params
         return dspy.teleprompt.BootstrapFewShot(
             metric=self.metric,
@@ -182,8 +182,8 @@ class BootstrapFewShotWrapper(DSPyOptimizerWrapper):
         self,
         student: dspy.Module,
         trainset: List,
-        valset: List | None = None,
-        teacher: dspy.Module | None = None,
+        valset: Optional[List] = None,
+        teacher: Optional[dspy.Module] = None,
     ) -> dspy.Module:
         optimizer = self.build()
         return optimizer.compile(
@@ -202,7 +202,7 @@ class BootstrapRandomSearchWrapper(DSPyOptimizerWrapper):
     demonstrations, and selects the best program based on validation performance.
     """
 
-    def build(self, **kwargs):
+    def build(self, **kwargs) -> dspy.teleprompt.BootstrapFewShotWithRandomSearch:
         params = self.config.params
         return dspy.teleprompt.BootstrapFewShotWithRandomSearch(
             metric=self.metric,
@@ -216,8 +216,8 @@ class BootstrapRandomSearchWrapper(DSPyOptimizerWrapper):
         self,
         student: dspy.Module,
         trainset: List,
-        valset: List | None = None,
-        teacher: dspy.Module | None = None,
+        valset: Optional[List] = None,
+        teacher: Optional[dspy.Module] = None,
     ) -> dspy.Module:
         optimizer = self.build()
         return optimizer.compile(
@@ -242,14 +242,13 @@ class KNNFewShotWrapper(DSPyOptimizerWrapper):
     requires_metric = False
     requires_trainset_in_init = True
 
-    def build(self, **kwargs):
+    def build(self, **kwargs) -> dspy.teleprompt.KNNFewShot:
         params = self.config.params
         trainset = kwargs.get("trainset", [])
 
         # Get or create embedder
         vectorizer = params.get("vectorizer")
         if vectorizer is None:
-            # Use default sentence-transformers embedder
             embedding_model = params.get(
                 "embedding_model", "sentence-transformers/all-MiniLM-L6-v2"
             )
@@ -265,8 +264,8 @@ class KNNFewShotWrapper(DSPyOptimizerWrapper):
         self,
         student: dspy.Module,
         trainset: List,
-        valset: List | None = None,
-        teacher: dspy.Module | None = None,
+        valset: Optional[List] = None,
+        teacher: Optional[dspy.Module] = None,
     ) -> dspy.Module:
         # KNNFewShot takes trainset in build (passed to __init__)
         optimizer = self.build(trainset=trainset)
@@ -285,7 +284,7 @@ class COPROWrapper(DSPyOptimizerWrapper):
     Good for optimizing instructions without needing many demonstrations.
     """
 
-    def build(self, **kwargs):
+    def build(self, **kwargs) -> dspy.teleprompt.COPRO:
         params = self.config.params
         return dspy.teleprompt.COPRO(
             metric=self.metric,
@@ -299,14 +298,14 @@ class COPROWrapper(DSPyOptimizerWrapper):
         self,
         student: dspy.Module,
         trainset: List,
-        valset: List | None = None,
-        teacher: dspy.Module | None = None,
+        valset: Optional[List] = None,
+        teacher: Optional[dspy.Module] = None,
     ) -> dspy.Module:
         optimizer = self.build()
         params = self.config.params
 
         # COPRO requires eval_kwargs
-        eval_kwargs = params.get("eval_kwargs", {})
+        eval_kwargs = params.get("eval_kwargs")
         if not eval_kwargs:
             # Provide sensible defaults
             eval_kwargs = {
@@ -330,7 +329,7 @@ class MIPROWrapper(DSPyOptimizerWrapper):
     to efficiently search the space of possible prompts.
     """
 
-    def build(self, **kwargs):
+    def build(self, **kwargs) -> dspy.teleprompt.MIPROv2:
         params = self.config.params
         return dspy.teleprompt.MIPROv2(
             metric=self.metric,
@@ -349,8 +348,8 @@ class MIPROWrapper(DSPyOptimizerWrapper):
         self,
         student: dspy.Module,
         trainset: List,
-        valset: List | None = None,
-        teacher: dspy.Module | None = None,
+        valset: Optional[List] = None,
+        teacher: Optional[dspy.Module] = None,
     ) -> dspy.Module:
         optimizer = self.build()
         params = self.config.params

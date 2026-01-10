@@ -24,8 +24,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/Asad-Ismail/nl2sql.git
 cd nl2sql
 
-# Install dependencies
+# Install dependencies and package in editable mode
 uv sync
+uv pip install -e .
 source .venv/bin/activate
 ```
 
