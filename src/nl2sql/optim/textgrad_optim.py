@@ -1,12 +1,10 @@
 import argparse
 import os
-import json
 import logging
 import random
 import textgrad as tg
 import copy
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, Optional
 from openai import OpenAI
 from tqdm import tqdm
 from datasets import load_dataset
@@ -15,13 +13,17 @@ from ratelimit import limits, sleep_and_retry
 
 # Shared utility imports
 from nl2sql.utils.util import (
-    load_schemas, execute_sql, compare_results, extract_sql_from_text,
-    get_db_path, categorize_sql_complexity, calculate_metrics,
-    save_evaluation_results, generate_markdown_report
+    load_schemas,
+    execute_sql,
+    compare_results,
+    extract_sql_from_text,
+    get_db_path,
+    calculate_metrics,
+    generate_markdown_report,
 )
 
 # Configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 SCHEMAS = load_schemas()
 
@@ -29,8 +31,10 @@ SCHEMAS = load_schemas()
 # Native Logger
 # ==============================================================================
 
+
 class LLMLogger:
     """Simple logger to track student and teacher calls."""
+
     def on_lm_start(self, role: str, model: str, prompt: str):
         print(f"\n{'='*20} [{role.upper()} CALL START] {'='*20}")
         print(f"MODEL: {model}")
@@ -40,54 +44,58 @@ class LLMLogger:
         print(f"\n{'-'*20} [{role.upper()} CALL END] {'-'*20}")
         print(f"OUTPUT: {output}\n")
 
+
 llm_logger = LLMLogger()
 
 # ==============================================================================
 # Engines & Graph Wrappers
 # ==============================================================================
 
+
 class TaskEngine:
     def __init__(self, model, base_url):
-        self.client = OpenAI(base_url=base_url, api_key="dummy",timeout=300.0)
+        self.client = OpenAI(base_url=base_url, api_key="dummy", timeout=300.0)
         self.model = model
 
     def __call__(self, prompt: str, system_prompt: str) -> str:
-        #llm_logger.on_lm_start("student", self.model, f"System: {system_prompt}\nUser: {prompt}")
+        # llm_logger.on_lm_start("student", self.model, f"System: {system_prompt}\nUser: {prompt}")
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
             temperature=0.0,
             max_tokens=250,
-            stop=["Explanation:", "Note:", "To find"]
+            stop=["Explanation:", "Note:", "To find"],
         )
         content = response.choices[0].message.content
         if not content:
             content = "SELECT 'Empty Response Error';"
-        #llm_logger.on_lm_end("student", content)
+        # llm_logger.on_lm_end("student", content)
         return content
+
 
 class NVIDIAGradientEngine:
     """Stable wrapper for NVIDIA/Teacher API for TextGrad."""
-    
+
     def __init__(self, model, api_key):
-        self.client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key,timeout=300.0)
+        self.client = OpenAI(
+            base_url="https://integrate.api.nvidia.com/v1", api_key=api_key, timeout=300.0
+        )
         self.model = model
-        
+
     @sleep_and_retry
     @limits(calls=38, period=60)
     def __call__(self, prompt: str, **kwargs) -> str:
-        #llm_logger.on_lm_start("teacher", self.model, prompt)
+        # llm_logger.on_lm_start("teacher", self.model, prompt)
         response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
+            model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.7
         )
         content = response.choices[0].message.content
-        #llm_logger.on_lm_end("teacher", content)
+        # llm_logger.on_lm_end("teacher", content)
         return content
+
 
 class SQLModule(tg.Variable):
     def __init__(self, system_prompt: tg.Variable, engine: TaskEngine):
@@ -98,32 +106,38 @@ class SQLModule(tg.Variable):
     def forward(self, question_str: str) -> tg.Variable:
         response_text = self.engine(question_str, self.system_prompt.value)
         return tg.Variable(
-            response_text,
-            role_description="model_prediction",
-            predecessors=[self.system_prompt]
+            response_text, role_description="model_prediction", predecessors=[self.system_prompt]
         )
+
 
 # ==============================================================================
 # Optimization Helpers
 # ==============================================================================
 
+
 def evaluate(model, dataset, desc="Evaluating"):
     results = []
     for ex in tqdm(dataset, desc=desc, leave=False):
-        schema = SCHEMAS.get(ex['db_id'], "No Schema")
+        schema = SCHEMAS.get(ex["db_id"], "No Schema")
         prompt = f"Schema:\n{schema}\n\nQuestion: {ex['question']}\nSQL:"
         prediction = model.forward(prompt)
         pred_sql = extract_sql_from_text(prediction.value)
-        db_path = get_db_path(ex['db_id'])
-        success, _, res = execute_sql(pred_sql, db_path)
-        _, _, gold_res = execute_sql(ex['sql'], db_path)
-        match, _ = compare_results(res, gold_res)
-        results.append({"is_valid": success, "results_match": match})
+        db_path = get_db_path(ex["db_id"])
+        pred_success, _, pred_res = execute_sql(pred_sql, db_path)
+        gold_success, _, gold_res = execute_sql(ex["sql"], db_path)
+
+        match = False
+        if gold_success and pred_success:
+            match, _ = compare_results(pred_res, gold_res)
+
+        results.append({"is_valid": pred_success, "results_match": match})
     return calculate_metrics(results)
+
 
 # ==============================================================================
 # Main Optimizer
 # ==============================================================================
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -142,10 +156,14 @@ def main():
 
     #  Load Data
     logger.info("Loading Datasets...")
-    full_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
-    dev_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
+    full_data = load_dataset(
+        "AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train"
+    )
+    dev_data = load_dataset(
+        "AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train"
+    )
     shuffled = full_data.shuffle(seed=42)
-    
+
     train_set = [x for x in shuffled.select(range(0, args.num_train))]
     val_set = [x for x in shuffled.select(range(args.num_train, args.num_train + args.num_val))]
     test_set = [x for x in dev_data]
@@ -157,58 +175,77 @@ def main():
 
     #  Variables & Optimizer
     initial_prompt = "Convert natural language to SQL. Output only the query."
-    system_prompt = tg.Variable(initial_prompt, requires_grad=True, role_description="system prompt")
+    system_prompt = tg.Variable(
+        initial_prompt, requires_grad=True, role_description="system prompt"
+    )
     model = SQLModule(system_prompt, task_engine)
     optimizer = tg.TGD(parameters=[system_prompt])
 
-    loss_fn = tg.TextLoss("""You are a functional SQL evaluator. 
+    loss_fn = tg.TextLoss(
+        """You are a functional SQL evaluator. 
     1. The 'Gold SQL' is the absolute ground truth. NEVER critique it or suggest changes to it.
     2. Ignore efficiency differences (like Subqueries vs Joins) unless they cause a data mismatch.
     3. If 'Execution Match' is False, identify exactly what logic in the Student's SQL caused the mismatch.
-    4. Provide feedback on how to update the 'System Prompt' to ensure the student follows the Gold SQL's logic exactly.""")
-
+    4. Provide feedback on how to update the 'System Prompt' to ensure the student follows the Gold SQL's logic exactly."""
+    )
 
     initial_metrics = evaluate(model, test_set, desc="Baseline Eval")
-    generate_markdown_report(metrics=initial_metrics, output_dir=args.output_dir,filename="initial_report.md", title="Baseline Results")
-    
-    best_val_acc = 0.0
+    generate_markdown_report(
+        metrics=initial_metrics,
+        output_dir=args.output_dir,
+        filename="initial_report.md",
+        title="Baseline Results",
+    )
+
+    # Initialize best accuracy with baseline validation performance
+    baseline_val_metrics = evaluate(model, val_set, desc="Baseline Val")
+    best_val_acc = baseline_val_metrics["result_match_pct"]
     best_prompt = initial_prompt
+    logger.info(f"Baseline validation accuracy: {best_val_acc:.2f}%")
 
     # 4. Optimization Loop
     for epoch in range(args.epochs):
         logger.info(f"--- Epoch {epoch+1} ---")
         random.shuffle(train_set)
-        
+
         for step in range(0, len(train_set), args.batch_size):
             batch = train_set[step : step + args.batch_size]
             optimizer.zero_grad()
             losses = []
-            
+
             for ex in batch:
-                schema = SCHEMAS.get(ex['db_id'], "")
+                schema = SCHEMAS.get(ex["db_id"], "")
                 prediction = model.forward(f"Schema:\n{schema}\nQuestion: {ex['question']}")
                 pred_sql = extract_sql_from_text(prediction.value)
-                
-                # Execution Evidence
-                success, error, res = execute_sql(pred_sql, get_db_path(ex['db_id']))
-                match, _ = compare_results(res, execute_sql(ex['sql'], get_db_path(ex['db_id']))[2])
-                
+
+                db_path = get_db_path(ex["db_id"])
+                pred_success, error, pred_res = execute_sql(pred_sql, db_path)
+                gold_success, _, gold_res = execute_sql(ex["sql"], db_path)
+
+                match = False
+                if gold_success and pred_success:
+                    match, _ = compare_results(pred_res, gold_res)
+
                 evidence = f"Pred: {pred_sql}\nGold: {ex['sql']}\nMatch: {match}\nError: {error}"
-                loss_input = tg.Variable(evidence, predecessors=[prediction], role_description="outcome")
+                loss_input = tg.Variable(
+                    evidence, predecessors=[prediction], role_description="outcome"
+                )
                 losses.append(loss_fn(loss_input))
-            
+
             tg.sum(losses).backward()
             optimizer.step()
 
         # Checkpoint Revert Logic
         val_metrics = evaluate(model, val_set, desc="Val Check")
-        if val_metrics['result_match_pct'] >= best_val_acc:
-            best_val_acc = val_metrics['result_match_pct']
+        if val_metrics["result_match_pct"] > best_val_acc:
+            best_val_acc = val_metrics["result_match_pct"]
             best_prompt = copy.deepcopy(system_prompt.value)
-            logger.info(f"Performance improved! Accuracy: {best_val_acc}%")
-            logger.info(f"Best Prompt so far: {system_prompt}%")
+            logger.info(f"Performance improved! Accuracy: {best_val_acc:.2f}%")
+            logger.info(f"Best Prompt so far: {best_prompt}")
         else:
-            logger.warning(f"Accuracy dropped to {val_metrics['result_match_pct']}%. Reverting.")
+            logger.warning(
+                f"Accuracy dropped to {val_metrics['result_match_pct']:.2f}%. Reverting."
+            )
             system_prompt.set_value(best_prompt)
 
     #  Final Report
@@ -217,7 +254,13 @@ def main():
     prompt_file.write_text(best_prompt)
     logger.info(f"Best prompt saved to {prompt_file}")
     final_metrics = evaluate(model, test_set, desc="Final Test")
-    generate_markdown_report(metrics=final_metrics, output_dir=args.output_dir,filename="final_optimized_report.md", title="TextGrad Results")
+    generate_markdown_report(
+        metrics=final_metrics,
+        output_dir=args.output_dir,
+        filename="final_optimized_report.md",
+        title="TextGrad Results",
+    )
+
 
 if __name__ == "__main__":
     main()

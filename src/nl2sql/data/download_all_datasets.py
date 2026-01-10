@@ -29,10 +29,10 @@ def save_to_jsonl(data, path):
     return len(data)
 
 
-print("="*70)
+print("=" * 70)
 print("Optimized NL2SQL Dataset Downloader")
 print("Strategy: Maximum diversity + SQL consistency")
-print("="*70)
+print("=" * 70)
 
 datasets_info = []
 total_train = 0
@@ -50,17 +50,19 @@ print("\n📥 DOWNLOADING OPTIMIZED TRAINING DATASETS\n")
 print("[1/5] Spider Training Set (Benchmark Standard)...")
 try:
     spider_train = load_dataset("xlangai/spider", split="train")
-    
+
     data = []
     for ex in spider_train:
-        data.append({
-            "dataset": "spider",
-            "question": ex["question"],
-            "sql": ex["query"],
-            "db_id": ex.get("db_id", ""),
-            "context": f"Database: {ex.get('db_id', '')}"
-        })
-    
+        data.append(
+            {
+                "dataset": "spider",
+                "question": ex["question"],
+                "sql": ex["query"],
+                "db_id": ex.get("db_id", ""),
+                "context": f"Database: {ex.get('db_id', '')}",
+            }
+        )
+
     count = save_to_jsonl(data, "nl2sql_data/train/spider_train.jsonl")
     print(f"  ✓ Spider Train: {count:,} examples (complex multi-table queries)")
     datasets_info.append(("Spider Train", count, "train"))
@@ -74,24 +76,26 @@ except Exception as e:
 print("\n[2/5] SQaLe Full Dataset (Real Schema Grounding)...")
 try:
     sqale = load_dataset("trl-lab/SQaLe-text-to-SQL-dataset", split="train")
-    
+
     data = []
     print(f"  Processing FULL dataset: {len(sqale):,} examples...")
-    
+
     for ex in sqale:
         question = ex.get("question", "")
         sql = ex.get("query", ex.get("sql", ""))
         schema = ex.get("schema", "")
-        
+
         if question and sql:
-            data.append({
-                "dataset": "sqale",
-                "question": question,
-                "sql": sql,
-                "db_id": "",
-                "context": schema[:1000] if schema else ""  # Truncate very long schemas
-            })
-    
+            data.append(
+                {
+                    "dataset": "sqale",
+                    "question": question,
+                    "sql": sql,
+                    "db_id": "",
+                    "context": schema[:1000] if schema else "",  # Truncate very long schemas
+                }
+            )
+
     count = save_to_jsonl(data, "nl2sql_data/train/sqale.jsonl")
     print(f"  ✓ SQaLe: {count:,} examples (22,989 real schemas)")
     datasets_info.append(("SQaLe", count, "train"))
@@ -105,17 +109,19 @@ except Exception as e:
 print("\n[3/5] Gretel Synthetic Text-to-SQL...")
 try:
     gretel = load_dataset("gretelai/synthetic_text_to_sql", split="train")
-    
+
     data = []
     for ex in gretel:
-        data.append({
-            "dataset": "gretel-synthetic",
-            "question": ex["sql_prompt"],
-            "sql": ex["sql"],
-            "db_id": "",
-            "context": ex.get("sql_context", "")
-        })
-    
+        data.append(
+            {
+                "dataset": "gretel-synthetic",
+                "question": ex["sql_prompt"],
+                "sql": ex["sql"],
+                "db_id": "",
+                "context": ex.get("sql_context", ""),
+            }
+        )
+
     count = save_to_jsonl(data, "nl2sql_data/train/gretel_train.jsonl")
     print(f"  ✓ Gretel Synthetic: {count:,} examples (diverse synthetic)")
     datasets_info.append(("Gretel Synthetic", count, "train"))
@@ -129,17 +135,19 @@ except Exception as e:
 print("\n[4/5] SQL-Create-Context...")
 try:
     sql_ctx = load_dataset("b-mc2/sql-create-context", split="train")
-    
+
     data = []
     for ex in sql_ctx:
-        data.append({
-            "dataset": "sql-context",
-            "question": ex["question"],
-            "sql": ex["answer"],
-            "db_id": "",
-            "context": ex.get("context", "")
-        })
-    
+        data.append(
+            {
+                "dataset": "sql-context",
+                "question": ex["question"],
+                "sql": ex["answer"],
+                "db_id": "",
+                "context": ex.get("context", ""),
+            }
+        )
+
     count = save_to_jsonl(data, "nl2sql_data/train/sql_context_train.jsonl")
     print(f"  ✓ SQL-Context: {count:,} examples (with schema context)")
     datasets_info.append(("SQL-Context", count, "train"))
@@ -153,17 +161,19 @@ except Exception as e:
 print("\n[5/5] Know-SQL...")
 try:
     know_sql = load_dataset("knowrohit07/know_sql", split="validation")
-    
+
     data = []
     for ex in know_sql:
-        data.append({
-            "dataset": "know-sql",
-            "question": ex.get("question", ""),
-            "sql": ex.get("answer", ""),  # Field is called 'answer', not 'query'
-            "db_id": "",
-            "context": ex.get("context", "")
-        })
-    
+        data.append(
+            {
+                "dataset": "know-sql",
+                "question": ex.get("question", ""),
+                "sql": ex.get("answer", ""),  # Field is called 'answer', not 'query'
+                "db_id": "",
+                "context": ex.get("context", ""),
+            }
+        )
+
     count = save_to_jsonl(data, "nl2sql_data/train/know_sql.jsonl")
     print(f"  ✓ Know-SQL: {count:,} examples (educational variety)")
     datasets_info.append(("Know-SQL", count, "train"))
@@ -184,17 +194,19 @@ print("\n\n📊 DOWNLOADING EVALUATION DATASETS\n")
 print("[1/1] Spider Dev Set (for evaluation)...")
 try:
     spider_dev = load_dataset("xlangai/spider", split="validation")
-    
+
     data = []
     for ex in spider_dev:
-        data.append({
-            "dataset": "spider",
-            "question": ex["question"],
-            "sql": ex["query"],
-            "db_id": ex.get("db_id", ""),
-            "context": f"Database: {ex.get('db_id', '')}"
-        })
-    
+        data.append(
+            {
+                "dataset": "spider",
+                "question": ex["question"],
+                "sql": ex["query"],
+                "db_id": ex.get("db_id", ""),
+                "context": f"Database: {ex.get('db_id', '')}",
+            }
+        )
+
     count = save_to_jsonl(data, "nl2sql_data/eval/spider_dev.jsonl")
     print(f"  ✓ Spider Dev: {count:,} examples")
     datasets_info.append(("Spider Dev", count, "eval"))
@@ -223,9 +235,9 @@ print(f"  ✓ Combined training data: {combined_path}")
 # SUMMARY
 # ========================================
 
-print("\n" + "="*70)
+print("\n" + "=" * 70)
 print("✅ DOWNLOAD COMPLETE")
-print("="*70)
+print("=" * 70)
 
 print("\n📊 Training Datasets (Optimized Selection):")
 for name, count, split in datasets_info:
@@ -240,9 +252,9 @@ for name, count, split in datasets_info:
 print(f"  {'TOTAL EVALUATION':.>40} {total_eval:>8,} examples")
 
 print("\n📁 Files Created:")
-print(f"  • Training data: nl2sql_data/train/*.jsonl")
-print(f"  • Combined train: nl2sql_data/all_train.jsonl")
-print(f"  • Evaluation: nl2sql_data/eval/spider_dev.jsonl")
+print("  • Training data: nl2sql_data/train/*.jsonl")
+print("  • Combined train: nl2sql_data/all_train.jsonl")
+print("  • Evaluation: nl2sql_data/eval/spider_dev.jsonl")
 
 print("\n✅ Dataset Optimization Applied:")
 print("  ✓ Removed DuckDB (different SQL dialect)")

@@ -8,9 +8,9 @@
 - Zero-shot prompting
 - Few-shot in-context learning
 - Self-correction with execution feedback
-- DSPy few-shot optimization
+- DSPy few-shot optimization (YAML configurable)
+- TextGrad prompt optimization
 - LoRA fine-tuning (parameter-efficient)
-- *Coming soon: TextGrad prompt optimization*
 
 **Bonus:** 750K+ curated training examples from 5 datasets (Spider, SQaLe, Gretel, SQL-Context, Know-SQL) for reproducible experiments.
 
@@ -24,8 +24,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/Asad-Ismail/nl2sql.git
 cd nl2sql
 
-# Install dependencies
+# Install dependencies and package in editable mode
 uv sync
+uv pip install -e .
 source .venv/bin/activate
 ```
 
@@ -54,14 +55,48 @@ Results saved to `results/baseline/` with detailed reports.
 
 ## DSPy Optimization
 
-Optimize prompts using DSPy's BootstrapFewShotWithRandomSearch:
+Optimize prompts using DSPy optimizers with YAML configuration:
 
 ```bash
-# Run DSPy optimization (requires vLLM server)
-python src/nl2sql/optim/dspy_fewshot.py
+# Run with default config (BootstrapFewShotWithRandomSearch)
+python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/default.yaml
 
-# Generates before/after comparison reports
-# Results saved to: results/dspy_optimized/
+# Run with MIPRO optimizer (Bayesian optimization)
+python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/mipro.yaml
+
+# Run with KNN few-shot (selects similar examples per query)
+python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/knn_fewshot.yaml
+
+# Run with COPRO (coordinate ascent for instructions)
+python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/copro.yaml
+
+# Override config via CLI
+python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/default.yaml \
+    --optimizer MIPRO --train_size 1000 --output_dir results/mipro_run
+```
+
+**Available optimizers:**
+| Optimizer | Description | Best For |
+|-----------|-------------|----------|
+| `LabeledFewShot` | Simple k random examples | Quick baseline |
+| `BootstrapFewShot` | Teacher-generated demos | Small datasets |
+| `BootstrapFewShotWithRandomSearch` | Random search over demos | General use |
+| `KNNFewShot` | k-Nearest Neighbors per query | Diverse SQL patterns |
+| `COPRO` | Coordinate ascent for instructions | Instruction tuning |
+| `MIPRO` | Bayesian optimization | Best quality |
+
+Results saved to `results/dspy_optimized/` with model and reports.
+
+## TextGrad Optimization
+
+Optimize system prompts using gradient-based feedback:
+
+```bash
+# Run TextGrad optimization (requires NVIDIA API key)
+export NVIDIA_API_KEY=your_key
+python src/nl2sql/optim/textgrad_optim.py --epochs 3 --batch_size 3
+
+# Results saved to: results/textgrad_v3/
 ```
 
 ## Evaluation Methods
@@ -70,8 +105,9 @@ python src/nl2sql/optim/dspy_fewshot.py
 1. **Zero-shot**: Direct question-to-SQL conversion (no examples)
 2. **Few-shot**: With 2 similar examples as context
 3. **Self-correction**: Iterative refinement with execution feedback (up to 3 attempts)
-4. **DSPy Optimization**: Automated few-shot example selection
-5. **Fine-tuned (LoRA)**: Model fine-tuned on training data
+4. **DSPy Optimization**: Automated few-shot example selection (configurable optimizers)
+5. **TextGrad Optimization**: Gradient-based system prompt optimization
+6. **Fine-tuned (LoRA)**: Model fine-tuned on training data
 
 All methods include complexity tracking (JOIN, GROUP BY, subqueries, etc.) and detailed reports.
 
@@ -85,6 +121,7 @@ Expected performance on Spider dev set (1,034 examples) with CodeLlama-7B:
 | Few-shot | 55-65% | 3-4 | +2 examples |
 | Self-correction | 65-75% | 5-8 | Up to 3 attempts |
 | DSPy Optimized | 70-80% | 3-5 | Optimized examples |
+| TextGrad Optimized | 70-80% | 3-5 | Optimized prompt |
 | Fine-tuned (LoRA) | 75-85% | 2-3 | Full training |
 
 *Note: Results vary based on model, prompt template, and evaluation settings.*
@@ -128,6 +165,39 @@ python src/nl2sql/data/prepare_unsloth_data.py
 
 Standard SQL only (SQLite/PostgreSQL/MySQL) - no dialect-specific extensions.
 
+## LLM Provider System
+
+Unified provider system supports multiple LLM backends with configurable rate limiting:
+
+```python
+from nl2sql.llm import get_llm
+
+# Use local vLLM
+llm = get_llm("codellama_7b")
+response = llm.generate_text("Convert to SQL: show all users")
+
+# Switch to Claude
+llm = get_llm("claude_sonnet")
+
+# Use with DSPy
+from nl2sql.llm.dspy_adapter import configure_dspy_from_config
+student_lm, teacher_lm = configure_dspy_from_config(
+    student_model="codellama_7b",
+    teacher_model="llama_70b_nvidia"
+)
+```
+
+**Supported Providers:**
+| Provider | Type | Models |
+|----------|------|--------|
+| vLLM (local) | OpenAI-compatible | CodeLlama, DeepSeek, Mistral |
+| NVIDIA NIM | OpenAI-compatible | Llama 70B/405B, Kimi K2 |
+| Anthropic | Native SDK | Claude Sonnet/Haiku/Opus |
+| OpenRouter | OpenAI-compatible | Any model on OpenRouter |
+| OpenAI | Native | GPT-4o, GPT-4o-mini |
+
+Configure in `src/nl2sql/optim/configs/llm/providers.yaml`.
+
 ## Project Structure
 
 ```
@@ -135,8 +205,14 @@ nl2sql/
 ├── src/nl2sql/
 │   ├── data/          # Dataset download and preprocessing
 │   ├── train/         # Training scripts (Unsloth/LoRA)
-│   ├── eval/          # Evaluation (baseline, SFT, DSPy)
-│   ├── optim/         # DSPy few-shot optimization
+│   ├── eval/          # Evaluation (baseline, SFT)
+│   ├── llm/           # Unified LLM provider system
+│   │   ├── config.py  # Provider config schemas
+│   │   ├── factory.py # Provider factory with rate limiting
+│   │   └── dspy_adapter.py  # DSPy integration
+│   ├── optim/         # DSPy and TextGrad optimization
+│   │   ├── configs/   # YAML configuration files
+│   │   └── optimizers.py  # Optimizer registry
 │   └── utils/         # Shared utilities (SQL execution, metrics)
 ├── models/            # Tokenizer configs and chat templates
 ├── data/              # Dataset documentation
