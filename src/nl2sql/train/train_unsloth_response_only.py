@@ -13,10 +13,9 @@ Features:
 
 import os
 import time
-import torch
-from datasets import load_dataset, interleave_datasets, Dataset
+from datasets import load_dataset, interleave_datasets
 import numpy as np
-from typing import Dict, List, Optional
+from typing import List, Optional
 from dataclasses import dataclass
 import logging
 from datetime import datetime
@@ -216,7 +215,7 @@ def load_and_prepare_datasets(dataset_configs: List[DatasetConfig], tokenizer) -
     if filtered_count > 0:
         logger.info(f"  Filtered {filtered_count} empty/invalid rows")
 
-    logger.info(f"✓ Formatting complete\n")
+    logger.info("✓ Formatting complete\n")
 
     # Debug: Show sample prompt
     logger.info(f"[DEBUG] Sample Prompt:\n{formatted_dataset[0]['text'][:500]}...\n")
@@ -256,7 +255,7 @@ class UnslothTrainer:
             load_in_4bit=load_in_4bit,
         )
 
-        logger.info(f" Model and tokenizer loaded")
+        logger.info(" Model and tokenizer loaded")
         logger.info(f" Max sequence length: {max_seq_length}")
         logger.info(f" 4-bit quantization: {load_in_4bit}")
 
@@ -350,7 +349,7 @@ class UnslothTrainer:
         total_steps = (len(dataset["train"]) * num_epochs) // effective_batch_size
 
         logger.info(f"\n{'='*70}")
-        logger.info(f"Training Configuration")
+        logger.info("Training Configuration")
         logger.info(f"{'='*70}")
         logger.info(f"Train dataset size: {len(dataset['train']):,} examples")
         logger.info(f"Validation dataset size: {len(dataset['test']):,} examples")
@@ -362,12 +361,12 @@ class UnslothTrainer:
         logger.info(f"Learning rate: {learning_rate:.2e}")
         logger.info(f"Warmup ratio: {warmup_ratio}")
         logger.info(f"Weight decay: {weight_decay}")
-        logger.info(f"Precision: Mixed (BF16 if supported, else FP16)")
+        logger.info("Precision: Mixed (BF16 if supported, else FP16)")
         logger.info(f"Logging steps: {logging_steps}")
         logger.info(f"Save steps: {save_steps}")
         logger.info(f"Eval steps: {eval_steps}")
         logger.info(f"Save total limit: {save_total_limit}")
-        logger.info(f"Loss masking: Response-only (train_on_responses_only)")
+        logger.info("Loss masking: Response-only (train_on_responses_only)")
         logger.info("")
 
         os.makedirs(self.output_dir, exist_ok=True)
@@ -384,7 +383,7 @@ class UnslothTrainer:
                 checkpoint_dirs.sort(key=lambda x: int(x.split("-")[1]))
                 checkpoint_dir = os.path.join(self.output_dir, checkpoint_dirs[-1])
                 logger.info(f"📂 Found existing checkpoint: {checkpoint_dir}")
-                logger.info(f"   Training will resume from this checkpoint\n")
+                logger.info("   Training will resume from this checkpoint\n")
 
         # Verify response masking will work
         self.verify_response_masking(dataset)
@@ -439,7 +438,7 @@ class UnslothTrainer:
         trainer.train(resume_from_checkpoint=checkpoint_dir)
 
         # Save final model
-        logger.info(f"\n Saving final model...")
+        logger.info("\n Saving final model...")
         self.model.save_pretrained(f"{self.output_dir}/final")
         self.tokenizer.save_pretrained(f"{self.output_dir}/final")
         logger.info(f"✓ Model saved to {self.output_dir}/final\n")

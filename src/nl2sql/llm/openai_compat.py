@@ -8,7 +8,6 @@ from typing import List, Optional
 from openai import OpenAI
 
 from .base import BaseLLMProvider, LLMMessage, LLMResponse
-from .config import ProviderConfig
 
 logger = logging.getLogger(__name__)
 

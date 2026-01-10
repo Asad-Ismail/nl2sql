@@ -6,7 +6,6 @@ import logging
 from typing import List, Optional
 
 from .base import BaseLLMProvider, LLMMessage, LLMResponse
-from .config import ProviderConfig
 
 logger = logging.getLogger(__name__)
 

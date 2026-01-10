@@ -13,8 +13,8 @@ import random
 import re
 from typing import Dict, List, Tuple
 import sqlparse
-from sqlparse.sql import IdentifierList, Identifier, Where, Comparison
-from sqlparse.tokens import Keyword, DML
+from sqlparse.sql import IdentifierList, Identifier
+from sqlparse.tokens import Keyword
 
 
 class SQLValidator:
@@ -30,7 +30,7 @@ class SQLValidator:
             # Check has SELECT statement
             stmt = parsed[0]
             return stmt.get_type() == "SELECT"
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -211,7 +211,7 @@ class SyntheticDataGenerator:
                         "augmentation": "schema_shuffle",
                     }
                 )
-        except:
+        except Exception:
             pass
 
         # 3. Query augmentation - add clauses
@@ -287,7 +287,7 @@ class SyntheticDataGenerator:
                 if total_original % 100 == 0:
                     print(f"Processed {total_original} examples, generated {total_generated} total")
 
-        print(f"\n✓ Complete!")
+        print("\n✓ Complete!")
         print(f"  Original examples: {total_original}")
         print(f"  Generated examples: {total_generated}")
         print(f"  Expansion rate: {total_generated/total_original:.1f}x")

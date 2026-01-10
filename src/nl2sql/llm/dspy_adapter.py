@@ -8,7 +8,6 @@ from typing import Optional, Tuple
 import dspy
 
 from .config import load_llm_config, LLMConfig
-from .factory import LLMFactory
 
 logger = logging.getLogger(__name__)
 

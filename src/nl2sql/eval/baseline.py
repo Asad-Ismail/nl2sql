@@ -13,9 +13,7 @@ Usage:
 
 import os
 import json
-import sqlite3
 import argparse
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from openai import OpenAI
 from tqdm import tqdm
@@ -28,10 +26,8 @@ from nl2sql.utils.util import (
     print_comparison,
     compare_results,
     calculate_metrics,
-    print_metrics,
     extract_sql_from_text,
     categorize_sql_complexity,
-    get_db_path,
     save_evaluation_results,
     generate_markdown_report,
 )
@@ -144,8 +140,8 @@ class SpiderEvaluator:
                 return data
             else:
                 raise FileNotFoundError(
-                    f"Could not load from HuggingFace or local file. "
-                    f"Please run: python src/nl2sql/data/download_all_datasets.py"
+                    "Could not load from HuggingFace or local file. "
+                    "Please run: python src/nl2sql/data/download_all_datasets.py"
                 )
 
     def load_model(self):
@@ -161,7 +157,7 @@ class SpiderEvaluator:
         print(f"{self.vllm_url}")
         self.client = OpenAI(api_key=key, base_url=self.vllm_url)  # vLLM doesn't require API key
         try:
-            response = self.client.chat.completions.create(
+            self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[{"role": "user", "content": "SELECT"}],
                 max_tokens=20,
@@ -171,7 +167,7 @@ class SpiderEvaluator:
         except Exception as e:
             print(f"{key}")
             print(f"❌ Error connecting to vLLM server: {e}")
-            print(f"\nMake sure vLLM server is running:")
+            print("\nMake sure vLLM server is running:")
             print(f"  vllm serve {self.model_name} --host 0.0.0.0 --port 8000\n")
             raise
 
@@ -274,10 +270,10 @@ class SpiderEvaluator:
             prompt += f"Question: {ex['question']}\n"
             prompt += f"SQL: {ex.get('query', ex.get('sql', ''))}\n\n"
 
-        prompt += f"### Now convert this question:\n"
+        prompt += "### Now convert this question:\n"
         prompt += f"Schema:\n{schema}\n\n"
         prompt += f"Question: {question}\n\n"
-        prompt += f"SQL Query:\n"
+        prompt += "SQL Query:\n"
 
         start_time = time.time()
         sql = self.generate_sql(prompt, max_new_tokens=250)
@@ -361,8 +357,8 @@ class SpiderEvaluator:
 
                 # Add feedback for next attempt
                 prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
-                prompt += f"\n-- Error: Generated empty SQL"
-                prompt += f"\n-- Please generate a valid SQL query:\n-- SQL:\n"
+                prompt += "\n-- Error: Generated empty SQL"
+                prompt += "\n-- Please generate a valid SQL query:\n-- SQL:\n"
                 continue
 
             # Try to execute
@@ -385,7 +381,7 @@ class SpiderEvaluator:
                 prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
                 prompt += f"\n-- SQL: {sql}"
                 prompt += f"\n-- Execution error: {error}"
-                prompt += f"\n-- Fix the error and try again:\n"
+                prompt += "\n-- Fix the error and try again:\n"
                 continue
 
             # Execution succeeded - now do LLM semantic validation
@@ -413,8 +409,8 @@ class SpiderEvaluator:
             prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
             prompt += f"\n-- SQL: {sql}"
             prompt += f"\n-- LLM Feedback: {llm_validation[:200]}..."
-            prompt += f"\n\n-- Generate improved SQL:"
-            prompt += f"\n-- SQL:"  # Clear signal to generate here
+            prompt += "\n\n-- Generate improved SQL:"
+            prompt += "\n-- SQL:"  # Clear signal to generate here
 
         # Use best attempt for final results (fallback to last if no valid attempts)
         final_attempt = best_attempt if best_attempt else attempts[-1]
@@ -704,7 +700,7 @@ def main():
     print("\n" + "=" * 60)
     print("BASELINE EVALUATION WITH vLLM")
     print("=" * 60)
-    print(f"\nMake sure vLLM server is running:")
+    print("\nMake sure vLLM server is running:")
     print(f"  vllm serve {args.model} --host 0.0.0.0 --port 8000")
     print(f"\nConnecting to: {args.vllm_url}")
     print(f"Model: {args.model}")
@@ -712,7 +708,7 @@ def main():
 
     # Run evaluation
     evaluator = SpiderEvaluator(model_name=args.model, vllm_url=args.vllm_url)
-    results = evaluator.evaluate(
+    evaluator.evaluate(
         output_dir=args.output, num_samples=args.num_samples, print_every=args.print_every
     )
 

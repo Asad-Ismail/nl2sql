@@ -1,12 +1,10 @@
 import argparse
 import os
-import json
 import logging
 import random
 import textgrad as tg
 import copy
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, Optional
 from openai import OpenAI
 from tqdm import tqdm
 from datasets import load_dataset
@@ -20,9 +18,7 @@ from nl2sql.utils.util import (
     compare_results,
     extract_sql_from_text,
     get_db_path,
-    categorize_sql_complexity,
     calculate_metrics,
-    save_evaluation_results,
     generate_markdown_report,
 )
 

@@ -11,7 +11,7 @@ Uploads:
 
 import json
 from pathlib import Path
-from huggingface_hub import HfApi, create_repo
+from huggingface_hub import HfApi
 from tqdm import tqdm
 
 # Configuration
@@ -25,10 +25,6 @@ def create_readme():
     # Load stats
     with open(LOCAL_DIR / "preparation_stats.json") as f:
         stats = json.load(f)
-
-    # Load config
-    with open(LOCAL_DIR / "unsloth_config.json") as f:
-        config = json.load(f)
 
     readme = f"""---
 license: cc-by-4.0
@@ -456,7 +452,7 @@ def main():
         "README.md",
     ]
 
-    print(f"\n[2/3] Verifying files...")
+    print("\n[2/3] Verifying files...")
     for filename in files_to_upload:
         filepath = LOCAL_DIR / filename
         if filepath.exists():
@@ -482,18 +478,18 @@ def main():
         print(f"\n{'='*70}")
         print("✅ Dataset uploaded successfully!")
         print(f"{'='*70}")
-        print(f"\n📦 View dataset at:")
+        print("\n📦 View dataset at:")
         print(f"   https://huggingface.co/datasets/{REPO_ID}")
-        print(f"\n🚀 Quick start:")
-        print(f"   from datasets import load_dataset")
+        print("\n🚀 Quick start:")
+        print("   from datasets import load_dataset")
         print(f'   dataset = load_dataset("{REPO_ID}", data_files="*_clean.jsonl", split="train")')
-        print(f"   print(len(dataset))  # 683,015 examples")
-        print(f"   print(dataset[0])    # View first example")
-        print(f"\n📖 See README for:")
-        print(f"   • Weighted sampling examples")
-        print(f"   • Training code snippets")
-        print(f"   • Dataset exploration")
-        print(f"   • Statistics and breakdown")
+        print("   print(len(dataset))  # 683,015 examples")
+        print("   print(dataset[0])    # View first example")
+        print("\n📖 See README for:")
+        print("   • Weighted sampling examples")
+        print("   • Training code snippets")
+        print("   • Dataset exploration")
+        print("   • Statistics and breakdown")
 
     except Exception as e:
         print(f"\n❌ Upload failed: {e}")

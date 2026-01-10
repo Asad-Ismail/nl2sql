@@ -12,11 +12,10 @@ This script:
 Output structure allows different weighting per dataset in Unsloth training.
 """
 
-import os
 import json
 import hashlib
 import sqlparse
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 from pathlib import Path
 from collections import defaultdict
 import re
@@ -91,7 +90,7 @@ class SQLDialectValidator:
                 str(parsed), reindent=False, keyword_case="upper", strip_whitespace=True
             )
             return formatted.strip()
-        except:
+        except Exception:
             # Fallback: basic normalization
             sql = re.sub(r"\s+", " ", sql)
             return sql.strip().upper()
@@ -169,7 +168,7 @@ class DatasetDeduplicator:
                 norm_new_sql = SQLDialectValidator.normalize_sql(sql)
                 norm_existing_sql = SQLDialectValidator.normalize_sql(existing_sql)
                 is_conflict = norm_new_sql != norm_existing_sql
-            except:
+            except Exception:
                 is_conflict = sql != existing_sql
 
             # Compare priorities
@@ -484,7 +483,7 @@ class UnslothDatasetPreparer:
             dataset_groups[source].append(ex)
 
         # Save each dataset separately
-        print(f"\n  Saving by source dataset:")
+        print("\n  Saving by source dataset:")
         for name in [d[0] for d in datasets]:
             if name in dataset_groups:
                 examples = dataset_groups[name]
@@ -604,7 +603,7 @@ class UnslothDatasetPreparer:
         print("PREPARATION COMPLETE")
         print("=" * 70)
 
-        print(f"\n📊 Overall Statistics:")
+        print("\n📊 Overall Statistics:")
         print(f"  Strategy: {self.stats['deduplication_strategy']}")
         print(f"  Total loaded: {self.stats['total_loaded']:,}")
         print(f"  Spider enriched with schemas: {self.stats['spider_enriched']:,}")
@@ -616,7 +615,7 @@ class UnslothDatasetPreparer:
             f"  Reduction: {100 * (1 - self.stats['valid_unique'] / self.stats['total_loaded']):.1f}%"
         )
 
-        print(f"\n📁 Per-Dataset Contribution (after global deduplication):")
+        print("\n📁 Per-Dataset Contribution (after global deduplication):")
         for name, stats in self.stats["per_dataset"].items():
             if name == "spider_dev":
                 continue
@@ -627,22 +626,22 @@ class UnslothDatasetPreparer:
                 f"(invalid: {stats['invalid']}, duplicates: {stats['duplicate']})"
             )
 
-        print(f"\n⚖️  Recommended Weights for Unsloth Training:")
+        print("\n⚖️  Recommended Weights for Unsloth Training:")
         for name, info in config["datasets"].items():
             print(f"  {name:.<20} weight={info['weight']:.2f}  " f"({info['reason']})")
 
-        print(f"\n📂 Output Files:")
+        print("\n📂 Output Files:")
         print(f"  Directory: {self.output_dir}/")
-        print(f"  Training datasets: *_clean.jsonl (separated for weighting)")
-        print(f"  Eval dataset: spider_dev_clean.jsonl")
-        print(f"  Config: unsloth_config.json")
-        print(f"  Stats: preparation_stats.json")
+        print("  Training datasets: *_clean.jsonl (separated for weighting)")
+        print("  Eval dataset: spider_dev_clean.jsonl")
+        print("  Config: unsloth_config.json")
+        print("  Stats: preparation_stats.json")
 
-        print(f"\n🚀 Next Steps:")
-        print(f"  1. Review weights in unsloth_config.json")
-        print(f"  2. Adjust weights based on your training goals")
-        print(f"  3. Use separate files for weighted sampling in Unsloth")
-        print(f"  4. Load datasets with: load_dataset('json', data_files='path')")
+        print("\n🚀 Next Steps:")
+        print("  1. Review weights in unsloth_config.json")
+        print("  2. Adjust weights based on your training goals")
+        print("  3. Use separate files for weighted sampling in Unsloth")
+        print("  4. Load datasets with: load_dataset('json', data_files='path')")
 
 
 def main():
@@ -653,7 +652,7 @@ def main():
     train_datasets = preparer.prepare_training_datasets()
 
     # Process eval dataset
-    eval_dataset = preparer.prepare_eval_dataset()
+    preparer.prepare_eval_dataset()
 
     # Create weighted configuration
     config = preparer.create_weighted_config(train_datasets)

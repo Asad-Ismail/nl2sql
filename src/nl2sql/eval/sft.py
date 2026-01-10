@@ -9,16 +9,10 @@ Usage:
 """
 
 import os
-import json
-import sqlite3
 import argparse
-import re
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 from collections import defaultdict
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from tqdm import tqdm
 import torch
 from datasets import load_dataset
@@ -27,16 +21,12 @@ from nl2sql.utils.util import (
     load_schemas,
     execute_sql,
     compare_results,
-    calculate_metrics,
-    print_metrics,
     print_comparison,
     categorize_sql_complexity,
-    extract_sql_from_text,
     get_db_path,
     save_evaluation_results,
     save_evaluation_summary,
     generate_markdown_report,
-    SQL_PATTERNS,
 )
 
 
@@ -51,7 +41,7 @@ class FinetunedModelEvaluator:
 
         # Load schemas from tables.json using shared utility
         print(f"\n{'='*60}")
-        print(f"Loading Database Schemas from tables.json")
+        print("Loading Database Schemas from tables.json")
         print(f"{'='*60}\n")
         self.schemas = load_schemas()
         print(f"✓ Loaded schemas for {len(self.schemas)} databases\n")
@@ -207,7 +197,7 @@ class FinetunedModelEvaluator:
         print(f"Evaluating on {len(data)} examples")
         print(f" Printing intermediate results every {print_every} examples")
         if print_prompts:
-            print(f" Printing ALL prompts sent to model")
+            print(" Printing ALL prompts sent to model")
         print()
 
         # Results storage
@@ -388,7 +378,7 @@ class FinetunedModelEvaluator:
         print(f"{'='*60}\n")
 
         # Print to console (unchanged)
-        print(f"Overall Metrics:")
+        print("Overall Metrics:")
         print(f"  Total: {metrics['total']}")
         print(f"  Valid SQL: {metrics['valid']} ({100*metrics['valid']/metrics['total']:.2f}%)")
         print(

@@ -10,8 +10,6 @@ Features:
 """
 
 import os
-import json
-import torch
 from datasets import load_dataset, interleave_datasets
 import numpy as np
 from typing import Dict, List, Optional
@@ -19,7 +17,6 @@ from dataclasses import dataclass
 import logging
 from datetime import datetime
 import time
-from tqdm import tqdm
 import wandb
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import SFTTrainer
@@ -146,7 +143,7 @@ def load_and_prepare_datasets(dataset_configs: List[DatasetConfig], tokenizer) -
         lambda x: create_prompt(x, tokenizer), batched=False, desc="Formatting"
     )
 
-    logger.info(f"✓ Formatting complete\n")
+    logger.info("✓ Formatting complete\n")
 
     # Split into train/validation (98% train, 2% validation)
     logger.info("Splitting into train/validation sets...")
@@ -232,7 +229,7 @@ class UnslothTrainer:
             load_in_4bit=load_in_4bit,
         )
 
-        logger.info(f"✓ Model and tokenizer loaded")
+        logger.info("✓ Model and tokenizer loaded")
         logger.info(f"✓ Max sequence length: {max_seq_length}")
         logger.info(f"✓ 4-bit quantization: {load_in_4bit}")
 
@@ -268,14 +265,14 @@ class UnslothTrainer:
     ):
         """Train the model"""
         logger.info(f"\n{'='*70}")
-        logger.info(f"Training Configuration")
+        logger.info("Training Configuration")
         logger.info(f"{'='*70}")
         logger.info(f"Dataset size: {len(dataset):,} examples")
         logger.info(f"Epochs: {num_epochs}")
         logger.info(f"Batch size: {batch_size} (gradient accumulation: 4)")
         logger.info(f"Effective batch size: {batch_size * 4}")
         logger.info(f"Learning rate: {learning_rate:.2e}")
-        logger.info(f"Precision: Mixed (BF16 if supported, else FP16)")
+        logger.info("Precision: Mixed (BF16 if supported, else FP16)")
         logger.info("")
 
         os.makedirs(self.output_dir, exist_ok=True)
@@ -342,7 +339,7 @@ class UnslothTrainer:
         trainer.train(resume_from_checkpoint=checkpoint_dir)
 
         # Save final model
-        logger.info(f"\n💾 Saving final model...")
+        logger.info("\n💾 Saving final model...")
         self.model.save_pretrained(f"{self.output_dir}/final")
         self.tokenizer.save_pretrained(f"{self.output_dir}/final")
         logger.info(f"✓ Model saved to {self.output_dir}/final\n")

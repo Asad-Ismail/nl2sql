@@ -5,9 +5,8 @@ import logging
 import os
 import re
 import sqlite3
-from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +303,7 @@ def print_comparison(
     print(f"{'='*70}")
 
     if is_valid:
-        print(f"\n✅ Generated SQL executed successfully")
+        print("\n✅ Generated SQL executed successfully")
 
         # Safe printing with None checks
         if gen_results and len(gen_results) > 3:
@@ -317,14 +316,14 @@ def print_comparison(
         elif gold_results is not None:
             print(f"Gold Results:      {gold_results}")
         else:
-            print(f"Gold Results:      None (failed to execute)")
+            print("Gold Results:      None (failed to execute)")
 
         if results_match:
-            print(f"🎯 MATCH: Results are identical!")
+            print("🎯 MATCH: Results are identical!")
         else:
-            print(f"❌ MISMATCH: Results differ")
+            print("❌ MISMATCH: Results differ")
     else:
-        print(f"\n❌ Generated SQL failed to execute")
+        print("\n❌ Generated SQL failed to execute")
     print(f"{'='*70}\n")
 
 

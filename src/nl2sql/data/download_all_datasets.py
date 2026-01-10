@@ -252,9 +252,9 @@ for name, count, split in datasets_info:
 print(f"  {'TOTAL EVALUATION':.>40} {total_eval:>8,} examples")
 
 print("\n📁 Files Created:")
-print(f"  • Training data: nl2sql_data/train/*.jsonl")
-print(f"  • Combined train: nl2sql_data/all_train.jsonl")
-print(f"  • Evaluation: nl2sql_data/eval/spider_dev.jsonl")
+print("  • Training data: nl2sql_data/train/*.jsonl")
+print("  • Combined train: nl2sql_data/all_train.jsonl")
+print("  • Evaluation: nl2sql_data/eval/spider_dev.jsonl")
 
 print("\n✅ Dataset Optimization Applied:")
 print("  ✓ Removed DuckDB (different SQL dialect)")
