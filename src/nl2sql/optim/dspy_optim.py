@@ -237,58 +237,79 @@ def run_optimization(config: DSPyOptimizerConfig):
         (compiled_module, optimized_metrics)
     """
     setup_logging(config)
-    student_lm, teacher_lm = setup_lms(config)
-    trainset, valset, devset = load_and_prep_data(config)
-
-    b_metrics = None
-    if config.evaluation.run_baseline:
-        logger.info("Running Baseline Evaluation...")
-        baseline = SQLModule(use_cot=config.module.use_cot)
-        _, b_metrics, _ = evaluate_module(baseline, devset, "Baseline")
-        logger.info(f"Baseline Result Match: {b_metrics['result_match_pct']:.2f}%")
-
-    logger.info(f"Starting Optimization with {config.optimizer.name}...")
-
-    optimizer_cls = OptimizerRegistry.get(config.optimizer.name)
-    optimizer_wrapper = optimizer_cls(metric=sql_metric, config=config.optimizer)
-
-    teacher_module = None
-    if config.models.teacher.enabled and teacher_lm:
-        teacher_module = SQLModule(use_cot=True)
-        for p in teacher_module.predictors():
-            p.lm = teacher_lm
-
-    compiled = optimizer_wrapper.compile(
-        student=SQLModule(use_cot=config.module.use_cot),
-        teacher=teacher_module,
-        trainset=trainset,
-        valset=valset,
-    )
-
-    logger.info("Running Optimized Evaluation...")
-    _, o_metrics, _ = evaluate_module(compiled, devset, "Optimized")
-
     output_dir = config.experiment.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    compiled.save(os.path.join(output_dir, "model.json"))
 
-    generate_markdown_report(
-        metrics=o_metrics,
-        output_dir=output_dir,
-        title=f"Optimization: {config.optimizer.name}",
-        model_name=config.models.student.name,
-        dataset_name="Spider Cleaned",
-    )
+    compiled = None
+    try:
+        student_lm, teacher_lm = setup_lms(config)
+        trainset, valset, devset = load_and_prep_data(config)
 
-    if b_metrics:
-        improvement = o_metrics["result_match_pct"] - b_metrics["result_match_pct"]
-        logger.info(f"Optimization Complete. Improvement: {improvement:+.2f}%")
-    else:
-        logger.info(
-            f"Optimization Complete. Result Match: {o_metrics['result_match_pct']:.2f}%"
+        b_metrics = None
+        if config.evaluation.run_baseline:
+            logger.info("Running Baseline Evaluation...")
+            baseline = SQLModule(use_cot=config.module.use_cot)
+            _, b_metrics, _ = evaluate_module(baseline, devset, "Baseline")
+            logger.info(f"Baseline Result Match: {b_metrics['result_match_pct']:.2f}%")
+
+        logger.info(f"Starting Optimization with {config.optimizer.name}...")
+
+        optimizer_cls = OptimizerRegistry.get(config.optimizer.name)
+        optimizer_wrapper = optimizer_cls(
+            metric=sql_metric, config=config.optimizer
         )
 
-    return compiled, o_metrics
+        teacher_module = None
+        if config.models.teacher.enabled and teacher_lm:
+            teacher_module = SQLModule(use_cot=True)
+            for p in teacher_module.predictors():
+                p.lm = teacher_lm
+
+        compiled = optimizer_wrapper.compile(
+            student=SQLModule(use_cot=config.module.use_cot),
+            teacher=teacher_module,
+            trainset=trainset,
+            valset=valset,
+        )
+
+        # Save checkpoint after optimization
+        checkpoint_path = os.path.join(output_dir, "checkpoint.json")
+        compiled.save(checkpoint_path)
+        logger.info(f"Checkpoint saved: {checkpoint_path}")
+
+        logger.info("Running Optimized Evaluation...")
+        _, o_metrics, _ = evaluate_module(compiled, devset, "Optimized")
+
+        compiled.save(os.path.join(output_dir, "model.json"))
+
+        generate_markdown_report(
+            metrics=o_metrics,
+            output_dir=output_dir,
+            title=f"Optimization: {config.optimizer.name}",
+            model_name=config.models.student.name,
+            dataset_name="Spider Cleaned",
+        )
+
+        if b_metrics:
+            improvement = (
+                o_metrics["result_match_pct"] - b_metrics["result_match_pct"]
+            )
+            logger.info(f"Optimization Complete. Improvement: {improvement:+.2f}%")
+        else:
+            logger.info(
+                f"Optimization Complete. Result Match: {o_metrics['result_match_pct']:.2f}%"
+            )
+
+        return compiled, o_metrics
+
+    except Exception as e:
+        logger.error(f"Optimization failed: {e}")
+        # Save partial results if available
+        if compiled is not None:
+            error_path = os.path.join(output_dir, "failed_model.json")
+            compiled.save(error_path)
+            logger.info(f"Partial results saved to: {error_path}")
+        raise
 
 
 def main():

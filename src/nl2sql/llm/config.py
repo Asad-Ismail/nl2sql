@@ -131,7 +131,15 @@ def load_llm_config(config_path: Optional[str] = None) -> LLMConfig:
     if not config_path.exists():
         raise FileNotFoundError(f"LLM config not found: {config_path}")
 
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in {config_path}: {e}")
+
+    if data is None:
+        raise ValueError(f"Config file is empty: {config_path}")
+    if not isinstance(data, dict):
+        raise ValueError(f"Config must be a dict, got {type(data).__name__}")
 
     return LLMConfig(**data)

@@ -78,8 +78,8 @@ def _register_providers():
         from .anthropic_provider import AnthropicProvider
 
         ProviderRegistry.register("anthropic", AnthropicProvider)
-    except ImportError:
-        logger.debug("Anthropic provider not available (anthropic package not installed)")
+    except ImportError as e:
+        logger.info(f"Anthropic provider not available: {e}")
 
 
 _register_providers()

@@ -64,32 +64,32 @@ class TokenBucketRateLimiter:
         bool
             True if token acquired, False if not (only when blocking=False)
         """
-        with self._lock:
-            self._refill()
+        max_attempts = 10
 
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
-                return True
+        for attempt in range(max_attempts):
+            with self._lock:
+                self._refill()
 
-            if not blocking:
-                return False
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return True
 
-            # Calculate wait time for next token
-            tokens_needed = 1.0 - self.tokens
-            wait_time = tokens_needed / self.refill_rate
+                if not blocking:
+                    return False
 
-        # Wait outside the lock
-        logger.debug(f"Rate limited, waiting {wait_time:.2f}s for token")
-        time.sleep(wait_time)
+                # Calculate wait time for next token
+                tokens_needed = 1.0 - self.tokens
+                wait_time = tokens_needed / self.refill_rate
 
-        # Try again after waiting
-        with self._lock:
-            self._refill()
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
-                return True
-            # Edge case: still not enough, recurse
-        return self.acquire(blocking=blocking)
+            # Wait outside the lock
+            logger.debug(
+                f"Rate limited, waiting {wait_time:.2f}s for token (attempt {attempt + 1}/{max_attempts})"
+            )
+            time.sleep(wait_time)
+
+        # Failed to acquire after max attempts
+        logger.error(f"Failed to acquire token after {max_attempts} attempts")
+        return False
 
     def get_wait_time(self) -> float:
         """

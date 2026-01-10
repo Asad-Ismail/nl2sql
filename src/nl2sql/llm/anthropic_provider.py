@@ -106,8 +106,12 @@ class AnthropicProvider(BaseLLMProvider):
         if top_p is not None and top_p < 1.0:
             request_kwargs["top_p"] = top_p
 
-        # Make the API call
-        response = self.client.messages.create(**request_kwargs)
+        # Make the API call with error handling
+        try:
+            response = self.client.messages.create(**request_kwargs)
+        except Exception as e:
+            logger.error(f"Anthropic API call failed: {e}")
+            raise
 
         # Extract content (Claude returns a list of content blocks)
         content = ""

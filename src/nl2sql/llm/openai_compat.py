@@ -98,11 +98,18 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         if top_p and top_p < 1.0:
             request_kwargs["top_p"] = top_p
 
-        # Make the API call
-        response = self.client.chat.completions.create(**request_kwargs)
+        # Make the API call with error handling
+        try:
+            response = self.client.chat.completions.create(**request_kwargs)
+        except Exception as e:
+            logger.error(f"OpenAI-compatible API call failed: {e}")
+            raise
 
         # Extract content
-        content = response.choices[0].message.content or ""
+        content = response.choices[0].message.content
+        if not content or not content.strip():
+            logger.warning(f"Empty response from {self.model}")
+            content = ""
 
         # Build usage dict
         usage = None
