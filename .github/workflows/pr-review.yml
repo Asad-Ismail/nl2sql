@@ -30,7 +30,8 @@ jobs:
         run: uv python install 3.11
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --all-extras
+        # --all-extras installs all optional dependency groups (dev, train, etc.)
 
       - name: Run formatting check
         run: uv run black src/ --line-length 100 --check
