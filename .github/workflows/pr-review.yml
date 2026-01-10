@@ -31,16 +31,43 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras
-        # --all-extras installs all optional dependency groups (dev, train, etc.)
 
       - name: Run formatting check
-        run: uv run black src/ --line-length 100 --check
+        id: black_check
+        run: |
+          if uv run black src/ --line-length 100 --check; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "msg=✅ All files properly formatted" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "msg=❌ Formatting issues found" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: Run linting
-        run: uv run ruff check src/
+        id: ruff_check
+        run: |
+          if uv run ruff check src/; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "msg=✅ No linting issues" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "msg=❌ Linting issues found" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: Run type checking
-        run: uv run mypy src/ || true  # Don't fail on type errors
+        id: mypy_check
+        run: |
+          uv run mypy src/ 2>&1 | tee mypy_output.txt
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "msg=✅ No type errors" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "msg=⚠️ Type errors found (non-blocking)" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
 
       - name: Post review comment
         uses: actions/github-script@v7
@@ -62,12 +89,15 @@ jobs:
 
             const pyFiles = files.filter(f => f.filename.endsWith('.py')).map(f => f.filename).length;
 
-            // Check workflow status
-            const workflowRun = context.payload.workflow_run;
-            const checksPassed = workflowRun && workflowRun.conclusion === 'success';
+            // Get check results from previous steps
+            const blackStatus = '${{ steps.black_check.outputs.status }}' || 'unknown';
+            const blackMsg = '${{ steps.black_check.outputs.msg }}' || 'Unknown';
+            const ruffStatus = '${{ steps.ruff_check.outputs.status }}' || 'unknown';
+            const ruffMsg = '${{ steps.ruff_check.outputs.msg }}' || 'Unknown';
+            const mypyStatus = '${{ steps.mypy_check.outputs.status }}' || 'unknown';
+            const mypyMsg = '${{ steps.mypy_check.outputs.msg }}' || 'Unknown';
 
-            const statusEmoji = checksPassed ? '✅' : '❌';
-            const statusText = checksPassed ? 'All checks passed!' : 'Some checks failed - see logs';
+            const allPassed = blackStatus === 'success' && ruffStatus === 'success';
 
             const comment = `## 🤖 Automated PR Review
 
@@ -75,11 +105,33 @@ jobs:
             **Branch:** \`${pr.head.ref}\`
             **Python files changed:** ${pyFiles}
 
-            ### ${statusEmoji} Check Results
+            ### ${allPassed ? '✅' : '❌'} Check Results
 
-            ${statusEmoji} Formatting check (black)
-            ${statusEmoji} Linting check (ruff)
-            ℹ️  Type checking completed (mypy)
+            ${blackMsg} (black)
+            ${ruffMsg} (ruff)
+            ${mypyMsg} (mypy)
+
+            ${!allPassed ? `
+            ### 🛠️ How to Fix
+
+            If checks failed, run these commands locally:
+
+            \`\`\`bash
+            # Install dependencies
+            uv sync --all-extras
+
+            # Auto-fix formatting
+            uv run black src/ --line-length 100
+
+            # Auto-fix linting
+            uv run ruff check src/ --fix
+
+            # Commit the fixes
+            git add .
+            git commit -m "style: Fix formatting and linting"
+            git push
+            \`\`\`
+            ` : ''}
 
             ### 📊 Changes Summary
 
@@ -89,8 +141,8 @@ jobs:
 
             ### 💡 Next Steps
 
-            1. Review the code changes manually
-            2. Check the workflow logs for details
+            1. ${allPassed ? '✅ All checks passed!' : 'Fix the issues using commands above'}
+            2. Review the code changes manually
             3. Run tests locally: \`uv run pytest\`
             4. Optionally run Claude Code PR review: \`/pr-review-toolkit:review-pr\`
 
@@ -126,4 +178,9 @@ jobs:
                 issue_number: context.issue.number,
                 body: comment
               });
+            }
+
+            // Fail the job if critical checks failed
+            if (!allPassed) {
+              core.setFailed('Some checks failed. Please fix and push again.');
             }

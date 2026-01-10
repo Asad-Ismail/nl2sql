@@ -145,9 +145,7 @@ class LLMFactory:
         # Apply rate limiting if requested
         if apply_rate_limit:
             provider_name = self.config.models[model_name].provider
-            rate_limiter = RateLimiterRegistry.get_or_create(
-                provider_name, provider_cfg.rate_limit
-            )
+            rate_limiter = RateLimiterRegistry.get_or_create(provider_name, provider_cfg.rate_limit)
             provider = _wrap_with_rate_limit(provider, rate_limiter)
 
         self._providers[cache_key] = provider

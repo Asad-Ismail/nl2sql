@@ -255,9 +255,7 @@ def run_optimization(config: DSPyOptimizerConfig):
         logger.info(f"Starting Optimization with {config.optimizer.name}...")
 
         optimizer_cls = OptimizerRegistry.get(config.optimizer.name)
-        optimizer_wrapper = optimizer_cls(
-            metric=sql_metric, config=config.optimizer
-        )
+        optimizer_wrapper = optimizer_cls(metric=sql_metric, config=config.optimizer)
 
         teacher_module = None
         if config.models.teacher.enabled and teacher_lm:
@@ -291,9 +289,7 @@ def run_optimization(config: DSPyOptimizerConfig):
         )
 
         if b_metrics:
-            improvement = (
-                o_metrics["result_match_pct"] - b_metrics["result_match_pct"]
-            )
+            improvement = o_metrics["result_match_pct"] - b_metrics["result_match_pct"]
             logger.info(f"Optimization Complete. Improvement: {improvement:+.2f}%")
         else:
             logger.info(
@@ -315,9 +311,7 @@ def run_optimization(config: DSPyOptimizerConfig):
 def main():
     parser = argparse.ArgumentParser(description="DSPy NL2SQL Optimizer (Configurable)")
 
-    parser.add_argument(
-        "--config", type=str, default=None, help="Path to YAML config file"
-    )
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
 
     parser.add_argument("--student_model", type=str, default=None)
     parser.add_argument("--api_base", type=str, default=None)

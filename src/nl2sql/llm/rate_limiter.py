@@ -145,9 +145,7 @@ class RateLimiterRegistry:
     _lock = threading.Lock()
 
     @classmethod
-    def get_or_create(
-        cls, provider_name: str, config: RateLimitConfig
-    ) -> TokenBucketRateLimiter:
+    def get_or_create(cls, provider_name: str, config: RateLimitConfig) -> TokenBucketRateLimiter:
         """
         Get or create a rate limiter for a provider.
 

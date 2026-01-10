@@ -83,9 +83,7 @@ class LLMConfig(BaseModel):
             If model or provider not found
         """
         if model_name not in self.models:
-            raise ValueError(
-                f"Unknown model: {model_name}. Available: {list(self.models.keys())}"
-            )
+            raise ValueError(f"Unknown model: {model_name}. Available: {list(self.models.keys())}")
 
         model_cfg = self.models[model_name]
         if model_cfg.provider not in self.providers:
@@ -122,9 +120,7 @@ def load_llm_config(config_path: Optional[str] = None) -> LLMConfig:
     """
     if config_path is None:
         # Default location
-        config_path = (
-            Path(__file__).parent.parent / "optim" / "configs" / "llm" / "providers.yaml"
-        )
+        config_path = Path(__file__).parent.parent / "optim" / "configs" / "llm" / "providers.yaml"
     else:
         config_path = Path(config_path)
 

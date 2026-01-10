@@ -78,9 +78,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         stop = self._get_param(stop, "stop")
 
         # Convert messages to OpenAI format
-        openai_messages = [
-            {"role": m.role, "content": m.content} for m in messages
-        ]
+        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
 
         # Build request kwargs
         request_kwargs = {

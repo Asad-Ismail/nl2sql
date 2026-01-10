@@ -17,9 +17,7 @@ class DSPyOptimizerWrapper(ABC):
     requires_metric: bool = True
     requires_trainset_in_init: bool = False
 
-    def __init__(
-        self, metric: Optional[Callable], config: OptimizerConfig
-    ) -> None:
+    def __init__(self, metric: Optional[Callable], config: OptimizerConfig) -> None:
         """
         Initialize optimizer wrapper.
 
@@ -117,9 +115,7 @@ class OptimizerRegistry:
             If optimizer name is not registered
         """
         if name not in cls._registry:
-            raise ValueError(
-                f"Unknown optimizer: {name}. Available: {list(cls._registry.keys())}"
-            )
+            raise ValueError(f"Unknown optimizer: {name}. Available: {list(cls._registry.keys())}")
         return cls._registry[name]
 
     @classmethod
