@@ -237,18 +237,31 @@ class KNNFewShotWrapper(DSPyOptimizerWrapper):
 
     requires_metric = False
     requires_trainset_in_init = True
+    
+    @staticmethod
+    def build_vectorizer(embedder_cfg):
+        embed_type = embedder_cfg["type"]
+    
+        if embed_type == "sentence_transformer":
+            from sentence_transformers import SentenceTransformer
+            model_name = embedder_cfg["model"]
+            st = SentenceTransformer(model_name)
+            return dspy.Embedder(st.encode)
+    
+        elif embed_type == "openai":
+            # hosted embeddings → LiteLLM path is OK
+            return embedder_cfg["model"]
+    
+        else:
+            raise ValueError(f"Unknown embedder type: {embed_type}")
 
     def build(self, **kwargs) -> dspy.teleprompt.KNNFewShot:
         params = self.config.params
         trainset = kwargs.get("trainset", [])
 
         # Get or create embedder
-        vectorizer = params.get("vectorizer")
-        if vectorizer is None:
-            embedding_model = params.get(
-                "embedding_model", "sentence-transformers/all-MiniLM-L6-v2"
-            )
-            vectorizer = dspy.Embedder(embedding_model)
+        embedder_cfg = params.get("embedder")
+        vectorizer = self.build_vectorizer(embedder_cfg)
 
         return dspy.teleprompt.KNNFewShot(
             k=params.get("k", 3),
@@ -327,43 +340,44 @@ class MIPROWrapper(DSPyOptimizerWrapper):
 
     def build(self, **kwargs) -> dspy.teleprompt.MIPROv2:
         params = self.config.params
-        return dspy.teleprompt.MIPROv2(
+    
+        auto = params.get("auto", "medium")  # choose a better default than "light"
+    
+        mipro_kwargs = dict(
             metric=self.metric,
-            auto=params.get("auto", "light"),
-            num_candidates=params.get("num_candidates", 10),
-            max_bootstrapped_demos=params.get("max_bootstrapped_demos", 4),
-            max_labeled_demos=params.get("max_labeled_demos", 4),
+            auto=auto,
+            max_bootstrapped_demos=params.get("max_bootstrapped_demos", 3),
+            max_labeled_demos=params.get("max_labeled_demos", 5),
             num_threads=params.get("num_threads"),
             init_temperature=params.get("init_temperature", 1.0),
             verbose=params.get("verbose", False),
             track_stats=params.get("track_stats", True),
             seed=params.get("seed", 9),
         )
+    
+        # Only legal when auto is None
+        if auto is None:
+            mipro_kwargs["num_candidates"] = params.get("num_candidates", 10)
+    
+        return dspy.teleprompt.MIPROv2(**mipro_kwargs)
 
-    def compile(
-        self,
-        student: dspy.Module,
-        trainset: List,
-        valset: Optional[List] = None,
-        teacher: Optional[dspy.Module] = None,
-    ) -> dspy.Module:
+
+    def compile(self, student, trainset, valset=None, teacher=None):
         optimizer = self.build()
         params = self.config.params
-
-        compile_kwargs = {
-            "student": student,
-            "trainset": trainset,
-            "teacher": teacher,
-        }
-
-        # Add optional parameters if specified
+        auto = params.get("auto", "medium")
+    
+        compile_kwargs = {"student": student, "trainset": trainset, "teacher": teacher}
         if valset is not None:
             compile_kwargs["valset"] = valset
-        if "num_trials" in params:
+    
+        # Only legal when auto is None
+        if auto is None and "num_trials" in params:
             compile_kwargs["num_trials"] = params["num_trials"]
+    
         if "minibatch" in params:
             compile_kwargs["minibatch"] = params["minibatch"]
         if "minibatch_size" in params:
             compile_kwargs["minibatch_size"] = params["minibatch_size"]
-
+    
         return optimizer.compile(**compile_kwargs)

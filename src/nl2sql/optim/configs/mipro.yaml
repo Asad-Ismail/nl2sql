@@ -1,9 +1,10 @@
 optimizer:
   name: "MIPRO"
   params:
+    auto: "medium"          # bump to "heavy" if you can spend more compute
     max_bootstrapped_demos: 3
-    max_labeled_demos: 3
-    num_candidates: 10
+    max_labeled_demos: 5
     init_temperature: 1.0
     verbose: false
     track_stats: true
+    seed: 9
