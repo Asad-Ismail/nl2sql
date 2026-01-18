@@ -166,7 +166,7 @@ class SpiderEvaluator:
             print("✓ Successfully connected to server\n")
         except Exception as e:
             print(f"{key}")
-            print(f"❌ Error connecting to vLLM server: {e}")
+            print(f" Error connecting to vLLM server: {e}")
             print("\nMake sure vLLM server is running:")
             print(f"  vllm serve {self.model_name} --host 0.0.0.0 --port 8000\n")
             raise
