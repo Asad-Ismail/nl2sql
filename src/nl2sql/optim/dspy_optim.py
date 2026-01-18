@@ -158,6 +158,8 @@ def setup_logging(config: DSPyOptimizerConfig):
 def setup_lms(config: DSPyOptimizerConfig):
     """Initialize Student and Teacher LMs from config."""
     student_cfg = config.models.student
+
+    print(f"Config osf sttudent is {student_cfg}")
     student_lm = dspy.LM(
         model=student_cfg.name,
         api_base=student_cfg.api_base,
@@ -338,6 +340,8 @@ def main():
 
     cli_overrides = cli_args_to_config_overrides(args)
     config = load_config(config_path=args.config, cli_overrides=cli_overrides)
+
+    print(f"Config is {config}")
 
     run_optimization(config)
 

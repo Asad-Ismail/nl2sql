@@ -237,21 +237,22 @@ class KNNFewShotWrapper(DSPyOptimizerWrapper):
 
     requires_metric = False
     requires_trainset_in_init = True
-    
+
     @staticmethod
     def build_vectorizer(embedder_cfg):
         embed_type = embedder_cfg["type"]
-    
+
         if embed_type == "sentence_transformer":
             from sentence_transformers import SentenceTransformer
+
             model_name = embedder_cfg["model"]
             st = SentenceTransformer(model_name)
             return dspy.Embedder(st.encode)
-    
+
         elif embed_type == "openai":
             # hosted embeddings → LiteLLM path is OK
             return embedder_cfg["model"]
-    
+
         else:
             raise ValueError(f"Unknown embedder type: {embed_type}")
 
@@ -340,9 +341,9 @@ class MIPROWrapper(DSPyOptimizerWrapper):
 
     def build(self, **kwargs) -> dspy.teleprompt.MIPROv2:
         params = self.config.params
-    
+
         auto = params.get("auto", "medium")  # choose a better default than "light"
-    
+
         mipro_kwargs = dict(
             metric=self.metric,
             auto=auto,
@@ -354,30 +355,29 @@ class MIPROWrapper(DSPyOptimizerWrapper):
             track_stats=params.get("track_stats", True),
             seed=params.get("seed", 9),
         )
-    
+
         # Only legal when auto is None
         if auto is None:
             mipro_kwargs["num_candidates"] = params.get("num_candidates", 10)
-    
-        return dspy.teleprompt.MIPROv2(**mipro_kwargs)
 
+        return dspy.teleprompt.MIPROv2(**mipro_kwargs)
 
     def compile(self, student, trainset, valset=None, teacher=None):
         optimizer = self.build()
         params = self.config.params
         auto = params.get("auto", "medium")
-    
+
         compile_kwargs = {"student": student, "trainset": trainset, "teacher": teacher}
         if valset is not None:
             compile_kwargs["valset"] = valset
-    
+
         # Only legal when auto is None
         if auto is None and "num_trials" in params:
             compile_kwargs["num_trials"] = params["num_trials"]
-    
+
         if "minibatch" in params:
             compile_kwargs["minibatch"] = params["minibatch"]
         if "minibatch_size" in params:
             compile_kwargs["minibatch_size"] = params["minibatch_size"]
-    
+
         return optimizer.compile(**compile_kwargs)
