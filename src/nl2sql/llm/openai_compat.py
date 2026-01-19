@@ -6,7 +6,7 @@ import logging
 from typing import List, Optional
 
 from openai import OpenAI
-
+from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 from .base import BaseLLMProvider, LLMMessage, LLMResponse
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,12 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             client_kwargs["default_headers"] = self.config.extra_headers
 
         self.client = OpenAI(**client_kwargs)
-
+    
+    @retry(
+        wait=wait_random_exponential(min=1, max=60), 
+        stop=stop_after_attempt(6),
+        retry=retry_if_exception_type((RateLimitError, APIConnectionError))
+    )
     def generate(
         self,
         messages: List[LLMMessage],
