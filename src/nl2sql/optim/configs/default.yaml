@@ -21,7 +21,7 @@ models:
     name: "openai/TheBloke/CodeLlama-7B-Instruct-AWQ"
     api_base: "http://localhost:8000/v1"
     api_key: "dummy"
-    max_tokens: 512
+    max_tokens: 1048
     temperature: 0.0
   teacher:
     enabled: false

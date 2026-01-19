@@ -131,13 +131,13 @@ class SpiderEvaluator:
             return data
 
         except Exception as e:
-            print(f"❌ Error loading from HuggingFace: {e}")
+            print(f" Error loading from HuggingFace: {e}")
             print("\nFalling back to local file if available...")
 
             # Fallback to local file
             local_file = "nl2sql_data/eval/spider_dev.jsonl"
             if os.path.exists(local_file):
-                print(f"✓ Loading from local file: {local_file}")
+                print(f" Loading from local file: {local_file}")
                 with open(local_file) as f:
                     data = [json.loads(line) for line in f]
 
@@ -158,6 +158,7 @@ class SpiderEvaluator:
         print(f"{'='*60}\n")
 
         try:
+<<<<<<< Updated upstream
             # Get provider from unified factory
             self.llm = get_llm(self.model_name, config_path=self.config_path)
 
@@ -167,6 +168,15 @@ class SpiderEvaluator:
             print(f"Provider: {self.llm.provider_type}")
             print(f"Model: {self.llm.model}\n")
 
+=======
+            self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": "SELECT"}],
+                max_tokens=20,
+                temperature=0.1,
+            )
+            print(" Successfully connected to server\n")
+>>>>>>> Stashed changes
         except Exception as e:
             print(f"❌ Error loading model: {e}")
             print("\nAvailable models from providers.yaml:")
@@ -179,6 +189,13 @@ class SpiderEvaluator:
         # Initialize semantic validator
         self.semantic_validator = SemanticValidator(self.generate_sql)
 
+<<<<<<< Updated upstream
+=======
+        print("Client initialized successfully\n")
+
+    @sleep_and_retry
+    @limits(calls=39, period=60)
+>>>>>>> Stashed changes
     def generate_sql(self, prompt: str, max_new_tokens: int = 1024) -> str:
         """Generate SQL using unified LLM provider"""
         try:
@@ -568,7 +585,7 @@ class SpiderEvaluator:
                         print()
 
                 except Exception as e:
-                    print(f"\n❌ Error on example {i}: {e}")
+                    print(f"\nError on example {i}: {e}")
                     results[method_name].append(
                         {
                             "method": method_name,
