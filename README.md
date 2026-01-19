@@ -4,6 +4,11 @@
 
 **Compare and evaluate different LLM-based approaches for Text-to-SQL generation**, from simple prompting to advanced optimization and fine-tuning.
 
+**Console Scripts:**
+- `nl2sql-baseline` - Baseline evaluation (zero-shot, few-shot, self-correction)
+- `nl2sql-dspy` - DSPy optimization with configurable optimizers
+- `nl2sql-sft-eval` - Fine-tuned model evaluation
+
 **Methods covered:**
 - Zero-shot prompting
 - Few-shot in-context learning
@@ -17,61 +22,50 @@
 ## Installation
 
 ```bash
-# Install uv package manager
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
 # Clone repository
 git clone https://github.com/Asad-Ismail/nl2sql.git
 cd nl2sql
 
-# Install dependencies and package in editable mode
-uv sync
-uv pip install -e .
-source .venv/bin/activate
+# Install with dependencies
+pip install -e .
+
+# Set API keys for cloud providers (optional)
+cp .env.example .env
+# Edit .env and add your API keys
 ```
 
 ## Baseline Evaluation
 
-Evaluate 3 baseline approaches on Spider dev set (1,034 examples):
+Evaluate 3 baseline approaches (zero-shot, few-shot, self-correction) on Spider dev set:
 
 ```bash
-#  Start vLLM server (CodeLlama-7B with AWQ quantization)
-## you can reduce context size if not optmizing for fewshot and corresponding gpu utilization e.g context size 2048 with gpu usage of 0.4
-vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --quantization awq \
-    --gpu-memory-utilization 0.8 \
-    --max-model-len 8048 \
-    --chat-template models/codellama_chat.jinja
-    
+# Local vLLM model (start server first)
+vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ --host 0.0.0.0 --port 8000
+nl2sql-baseline --model codellama_7b --num-samples 100
 
-#  Run evaluation (in another terminal)
-python src/nl2sql/eval/baseline.py --num-samples 100  # Quick test
-python src/nl2sql/eval/baseline.py                    # Full evaluation
+# Cloud providers (no server needed, just set API key)
+nl2sql-baseline --model claude_sonnet --num-samples 100
+nl2sql-baseline --model llama_70b_nvidia --num-samples 100
+nl2sql-baseline --model gpt4o --num-samples 100
+
+# Full evaluation (all 1,034 Spider dev examples)
+nl2sql-baseline --model codellama_7b
 ```
 
-Results saved to `results/baseline/` with detailed reports.
+**Available models:** `codellama_7b`, `deepseek_coder_7b`, `mistral_7b`, `claude_sonnet`, `llama_70b_nvidia`, `gpt4o`, etc. (see `src/nl2sql/optim/configs/llm/providers.yaml`)
+
+Results saved to `results/baseline_<model>/` with detailed reports.
 
 ## DSPy Optimization
 
 Optimize prompts using DSPy optimizers with YAML configuration:
 
 ```bash
-# Run with default config (BootstrapFewShotWithRandomSearch)
-python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/default.yaml
-
-# Run with MIPRO optimizer (Bayesian optimization)
-python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/mipro.yaml
-
-# Run with KNN few-shot (selects similar examples per query)
-python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/knn_fewshot.yaml
-
-# Run with COPRO (coordinate ascent for instructions)
-python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/copro.yaml
+# Run with default config
+nl2sql-dspy --config src/nl2sql/optim/configs/default.yaml
 
 # Override config via CLI
-python src/nl2sql/optim/dspy_optim.py --config src/nl2sql/optim/configs/default.yaml \
+nl2sql-dspy --config src/nl2sql/optim/configs/default.yaml \
     --optimizer MIPRO --train_size 1000 --output_dir results/mipro_run
 ```
 
@@ -135,7 +129,7 @@ Expected performance on Spider dev set (1,034 examples) with CodeLlama-7B:
 python src/nl2sql/train/train_unsloth_complete.py
 
 # Evaluate fine-tuned model
-python src/nl2sql/eval/sft.py --model-path models/your-model
+nl2sql-sft-eval --model models/your-model --num-samples 100
 ```
 
 **Optional:** Download and prepare datasets locally:

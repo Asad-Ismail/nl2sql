@@ -7,6 +7,7 @@ from typing import Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
+from dotenv import load_dotenv
 
 from nl2sql.utils import resolve_env_vars
 
@@ -108,6 +109,10 @@ def load_llm_config(config_path: Optional[str] = None) -> LLMConfig:
     """
     Load LLM configuration from YAML file.
 
+    Automatically loads .env files from:
+    1. Current directory
+    2. Project root
+
     Parameters
     ----------
     config_path : str, optional
@@ -118,6 +123,10 @@ def load_llm_config(config_path: Optional[str] = None) -> LLMConfig:
     LLMConfig
         Loaded and validated configuration
     """
+    # Load .env files (will not overwrite existing env vars)
+    load_dotenv()  # Current directory
+    load_dotenv(Path(__file__).parent.parent.parent / ".env")  # Project root
+
     if config_path is None:
         # Default location
         config_path = Path(__file__).parent.parent / "optim" / "configs" / "llm" / "providers.yaml"

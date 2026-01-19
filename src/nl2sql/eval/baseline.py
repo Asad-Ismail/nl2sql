@@ -1,25 +1,25 @@
 """
-Baseline Evaluation for NL2SQL on Spider Dataset (using vLLM)
+Baseline Evaluation for NL2SQL on Spider Dataset (using unified LLM provider system)
 
 Evaluates 3 standard baseline approaches:
 1. Zero-shot: Single LLM call without examples
 2. Few-shot: With 2 similar examples
 3. Self-correction: Generate → Fix execution errors → LLM validation → Result comparison
+
 Usage:
-    python baseline_improved.py --model codellama/CodeLlama-7b-hf
-    python baseline_improved.py --model meta-llama/Llama-2-7b-hf --num-samples 50
-    python baseline_improved.py --vllm-url http://localhost:8000/v1
+    python baseline.py --model codellama_7b
+    python baseline.py --model claude_sonnet --num-samples 50
+    python baseline.py --model llama_70b_nvidia --config-path path/to/providers.yaml
 """
 
 import os
 import json
 import argparse
 from typing import Dict, List, Optional, Tuple
-from openai import OpenAI
 from tqdm import tqdm
 import time
 from datasets import load_dataset
-from ratelimit import limits, sleep_and_retry
+from nl2sql.llm.factory import get_llm
 from nl2sql.utils.util import (
     load_schemas,
     execute_sql,
@@ -69,16 +69,23 @@ Answer:"""
 
 
 class SpiderEvaluator:
-    """Evaluate baseline approaches on Spider dataset using vLLM"""
+    """Evaluate baseline approaches on Spider dataset using unified LLM provider system"""
 
     def __init__(
         self,
-        model_name: str = "codellama/CodeLlama-7b-hf",
-        vllm_url: str = "http://localhost:8000/v1",
+        model_name: str = "codellama_7b",
+        config_path: Optional[str] = None,
     ):
+        """
+        Initialize the evaluator with a model from providers.yaml
+
+        Args:
+            model_name: Model name from providers.yaml (e.g., "codellama_7b", "claude_sonnet")
+            config_path: Optional path to custom providers.yaml configuration file
+        """
         self.model_name = model_name
-        self.vllm_url = vllm_url
-        self.client = None
+        self.config_path = config_path
+        self.llm = None
         self.semantic_validator = None
         self.schemas = load_schemas()
 
@@ -145,56 +152,43 @@ class SpiderEvaluator:
                 )
 
     def load_model(self):
-        """Connect to vLLM server via OpenAI API"""
+        """Load LLM provider using unified factory"""
         print(f"\n{'='*60}")
-        print(f"Connecting to server: {self.vllm_url}")
-        print(f"Model: {self.model_name}")
+        print(f"Loading model: {self.model_name}")
         print(f"{'='*60}\n")
 
-        # Initialize OpenAI client pointing to vLLM server
-        key = "sk-local"
-
-        print(f"{self.vllm_url}")
-        self.client = OpenAI(api_key=key, base_url=self.vllm_url)  # vLLM doesn't require API key
         try:
-            self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": "SELECT"}],
-                max_tokens=20,
-                temperature=0.1,
-            )
-            print("✓ Successfully connected to server\n")
+            # Get provider from unified factory
+            self.llm = get_llm(self.model_name, config_path=self.config_path)
+
+            # Test connection
+            test_response = self.llm.generate_text("SELECT", max_tokens=20)
+            print("✓ Successfully connected to provider\n")
+            print(f"Provider: {self.llm.provider_type}")
+            print(f"Model: {self.llm.model}\n")
+
         except Exception as e:
-            print(f"{key}")
-            print(f" Error connecting to vLLM server: {e}")
-            print("\nMake sure vLLM server is running:")
-            print(f"  vllm serve {self.model_name} --host 0.0.0.0 --port 8000\n")
+            print(f"❌ Error loading model: {e}")
+            print("\nAvailable models from providers.yaml:")
+            from nl2sql.llm.factory import LLMFactory
+            factory = LLMFactory(self.config_path)
+            for model in factory.list_models():
+                print(f"  - {model}")
             raise
 
-        # Initialize semantic validator with generate function
+        # Initialize semantic validator
         self.semantic_validator = SemanticValidator(self.generate_sql)
 
-        print("Client initialized successfully\n")
-
-    @sleep_and_retry
-    @limits(calls=35, period=60)
     def generate_sql(self, prompt: str, max_new_tokens: int = 1024) -> str:
-        """Generate SQL from prompt using vLLM via OpenAI API"""
+        """Generate SQL using unified LLM provider"""
         try:
-            # Wrap the raw prompt in the user role
-            messages = [{"role": "user", "content": prompt}]
-
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
+            # Use LLMFactory provider (rate limiting handled automatically)
+            generated = self.llm.generate_text(
+                prompt=prompt,
                 max_tokens=max_new_tokens,
                 temperature=0.0,
-                top_p=1.0,
-                stop=["\n\n", "###"],  # Uncomment if needed
+                stop=["\n\n", "###"],
             )
-
-            # Access content via message.content, not text
-            generated = response.choices[0].message.content
 
             sql = self._extract_sql(generated)
             return sql.strip()
@@ -669,21 +663,26 @@ class SpiderEvaluator:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Baseline Evaluation on Spider (vLLM)")
+    parser = argparse.ArgumentParser(
+        description="Baseline Evaluation on Spider (using unified LLM provider system)"
+    )
     parser.add_argument(
         "--model",
         type=str,
-        default="TheBloke/CodeLlama-7B-Instruct-AWQ",
-        help="Model name (must match vLLM server)",
+        default="codellama_7b",
+        help="Model name from providers.yaml (e.g., codellama_7b, claude_sonnet, llama_70b_nvidia)",
     )
     parser.add_argument(
-        "--vllm-url", type=str, default="http://localhost:8000/v1", help="vLLM server URL"
+        "--config-path",
+        type=str,
+        default=None,
+        help="Optional path to custom providers.yaml configuration file",
     )
     parser.add_argument(
         "--output",
         type=str,
-        default="results/baseline_nematron3",
-        help="Output directory for results",
+        default=None,
+        help="Output directory for results (default: results/baseline_<model_name>)",
     )
     parser.add_argument(
         "--num-samples", type=int, default=None, help="Number of samples to evaluate (default: all)"
@@ -691,28 +690,31 @@ def main():
     parser.add_argument(
         "--print-every",
         type=int,
-        default=1,
+        default=10,
         help="Print intermediate results every N examples (default: 10)",
     )
 
     args = parser.parse_args()
 
+    # Generate output directory based on model name if not specified
+    if args.output is None:
+        args.output = f"results/baseline_{args.model}"
+
     print("\n" + "=" * 60)
-    print("BASELINE EVALUATION WITH vLLM")
+    print("BASELINE EVALUATION WITH UNIFIED LLM PROVIDER SYSTEM")
     print("=" * 60)
-    print("\nMake sure vLLM server is running:")
-    print(f"  vllm serve {args.model} --host 0.0.0.0 --port 8000")
-    print(f"\nConnecting to: {args.vllm_url}")
-    print(f"Model: {args.model}")
+    print(f"\nModel: {args.model}")
+    if args.config_path:
+        print(f"Config: {args.config_path}")
     print("=" * 60 + "\n")
 
     # Run evaluation
-    evaluator = SpiderEvaluator(model_name=args.model, vllm_url=args.vllm_url)
+    evaluator = SpiderEvaluator(model_name=args.model, config_path=args.config_path)
     evaluator.evaluate(
         output_dir=args.output, num_samples=args.num_samples, print_every=args.print_every
     )
 
-    print("\n Baseline evaluation complete!")
+    print("\n✓ Baseline evaluation complete!")
     print(f"\nResults saved to: {args.output}/")
 
 

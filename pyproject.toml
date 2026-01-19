@@ -21,11 +21,11 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "torch==2.9.0",
-    "transformers==4.56.0",
+    "torch==2.5.1",
+    "transformers==4.56.1",
     "datasets==3.6.0",
     "pandas==2.3.3",
-    "numpy==2.3.5",
+    "numpy==1.26.4",
     "sqlparse==0.5.4",
     "tqdm==4.67.1",
     "scikit-learn==1.7.2",
@@ -39,6 +39,7 @@ dependencies = [
     "pydantic>=2.0",
     "anthropic>=0.40.0",
     "ratelimit>=2.2.1",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +55,11 @@ train = [
     "trl>=0.22.2",
     "xformers>=0.0.28",
 ]
+
+[project.scripts]
+nl2sql-dspy = "nl2sql.optim.dspy_optim:main"
+nl2sql-baseline = "nl2sql.eval.baseline:main"
+nl2sql-sft-eval = "nl2sql.eval.sft:main"
 
 
 [build-system]
