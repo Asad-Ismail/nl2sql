@@ -47,4 +47,4 @@ evaluation:
 
 logging:
   level: "INFO"
-  enable_llm_logger: true
+  enable_llm_logger: false

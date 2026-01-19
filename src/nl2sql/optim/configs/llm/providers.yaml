@@ -23,8 +23,8 @@ providers:
     api_key: "${NVIDIA_API_KEY}"
     timeout: 300.0
     rate_limit:
-      calls_per_minute: 38
-      burst_limit: 5
+      calls_per_minute: 35
+      burst_limit: 1
     default_params:
       temperature: 0.7
       max_tokens: 1024
