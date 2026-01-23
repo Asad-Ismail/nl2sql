@@ -19,6 +19,40 @@
 
 **Bonus:** 750K+ curated training examples from 5 datasets (Spider, SQaLe, Gretel, SQL-Context, Know-SQL) for reproducible experiments.
 
+📖 **[Read the full analysis on my blog](https://asad-ismail.github.io/)** for detailed insights, methodology, and lessons learned.
+
+## Results Summary
+
+Performance on Spider dev set (1,034 examples):
+
+### CodeLlama-7B Results
+
+| Method | Valid SQL % | Execution Match % | Avg Time (s) | Notes |
+|--------|-------------|-------------------|--------------|-------|
+| **Baseline Methods** |
+| Zero-Shot | 83.7% | 57.3% | 10.70s | Fast baseline |
+| Few-Shot | 83.8% | 56.7% | 10.96s | Degraded performance ([see analysis](https://asad-ismail.github.io/)) |
+| Self-Correction | 87.8% | 58.7% | 75.53s | +1.4% gain, but 7x slower |
+| **Optimized Methods** |
+| DSPy (MIPRO) | 84.0% | 59.0% | ~0s* | Matches Self-Correction instantly |
+| **Fine-Tuned** |
+| Unsloth LoRA | **90.1%** | **73.0%** | 2.50s | **Best 7B Result (+14% gain)** |
+
+### Llama-3-70B Reference
+
+| Method | Valid SQL % | Execution Match % | Avg Time (s) | Notes |
+|--------|-------------|-------------------|--------------|-------|
+| Zero-Shot | 98.8% | 78.3% | 4.34s | Large model ceiling |
+| Self-Correction | 99.4% | 79.7% | 33.71s | State-of-the-art range |
+
+*DSPy optimization time amortized across queries after initial training
+
+**Key Findings:**
+- **Fine-tuning wins**: LoRA fine-tuning delivers the best results for 7B models (+14% execution accuracy)
+- **DSPy efficiency**: Matches self-correction performance without runtime overhead
+- **Few-shot paradox**: Adding examples degraded performance (discussed in [blog analysis](https://asad-ismail.github.io/))
+- **70B ceiling**: Large models approach 80% execution accuracy, setting the performance ceiling
+
 ## Installation
 
 ```bash
@@ -92,33 +126,6 @@ python src/nl2sql/optim/textgrad_optim.py --epochs 3 --batch_size 3
 
 # Results saved to: results/textgrad_v3/
 ```
-
-## Evaluation Methods
-
-**Methods compared:**
-1. **Zero-shot**: Direct question-to-SQL conversion (no examples)
-2. **Few-shot**: With 2 similar examples as context
-3. **Self-correction**: Iterative refinement with execution feedback (up to 3 attempts)
-4. **DSPy Optimization**: Automated few-shot example selection (configurable optimizers)
-5. **TextGrad Optimization**: Gradient-based system prompt optimization
-6. **Fine-tuned (LoRA)**: Model fine-tuned on training data
-
-All methods include complexity tracking (JOIN, GROUP BY, subqueries, etc.) and detailed reports.
-
-## Results Comparison
-
-Expected performance on Spider dev set (1,034 examples) with CodeLlama-7B:
-
-| Method | Valid SQL % | Avg Time (s) | Notes |
-|--------|-------------|--------------|-------|
-| Zero-shot | 40-50% | 2-3 | Baseline |
-| Few-shot | 55-65% | 3-4 | +2 examples |
-| Self-correction | 65-75% | 5-8 | Up to 3 attempts |
-| DSPy Optimized | 70-80% | 3-5 | Optimized examples |
-| TextGrad Optimized | 70-80% | 3-5 | Optimized prompt |
-| Fine-tuned (LoRA) | 75-85% | 2-3 | Full training |
-
-*Note: Results vary based on model, prompt template, and evaluation settings.*
 
 ## Training
 
@@ -219,6 +226,15 @@ nl2sql/
 - GPU with 16GB+ VRAM (for 7B model inference)
 - ~5GB disk for Spider evaluation data
 - ~20GB for full training datasets (if downloading locally)
+
+## Learn More
+
+📖 **[Read the detailed analysis on my blog](https://asad-ismail.github.io/)** covering:
+- Why few-shot learning degraded performance
+- Self-correction vs DSPy optimization trade-offs
+- Fine-tuning strategies and data preparation
+- Comparative analysis across model sizes
+- Recommendations for production deployments
 
 ## Citation
 
