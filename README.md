@@ -14,12 +14,13 @@
 - Few-shot in-context learning
 - Self-correction with execution feedback
 - DSPy few-shot optimization (YAML configurable)
+- OpenEvolve 
 - TextGrad prompt optimization
 - LoRA fine-tuning (parameter-efficient)
 
 **Bonus:** 750K+ curated training examples from 5 datasets (Spider, SQaLe, Gretel, SQL-Context, Know-SQL) for reproducible experiments.
 
-📖 **[Read the full analysis on my blog](https://asad-ismail.github.io/)** for detailed insights, methodology, and lessons learned.
+**[Read the full analysis here](https://asad-ismail.github.io/)** for detailed insights, methodology, and lessons learned.
 
 ## Results Summary
 

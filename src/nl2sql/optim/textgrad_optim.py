@@ -58,7 +58,6 @@ class TaskEngine:
             ],
             temperature=0.0,
             max_tokens=1024,
-            #stop=["Explanation:", "Note:", "To find"],
         )
         content = response.choices[0].message.content
         if not content:
