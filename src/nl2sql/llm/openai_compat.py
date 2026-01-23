@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
+from openai import APIConnectionError, RateLimitError
 from .base import BaseLLMProvider, LLMMessage, LLMResponse
 
 logger = logging.getLogger(__name__)

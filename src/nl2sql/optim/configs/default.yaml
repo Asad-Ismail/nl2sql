@@ -21,7 +21,7 @@ models:
     name: "openai/TheBloke/CodeLlama-7B-Instruct-AWQ"
     api_base: "http://localhost:8000/v1"
     api_key: "dummy"
-    max_tokens: 1048
+    max_tokens: 2048
     temperature: 0.0
   teacher:
     enabled: false
@@ -40,9 +40,12 @@ optimizer:
     max_labeled_demos: 2
     num_candidate_programs: 5
     num_threads: 4
+    embedder:
+      type: "sentence_transformer"
+      model: "all-MiniLM-L6-v2"
 
 evaluation:
-  run_baseline: true
+  run_baseline: false
   save_intermediate: false
 
 logging:

@@ -97,6 +97,15 @@ def sql_metric(example, prediction, trace=None) -> float:
         return 0.0
 
     match, _ = compare_results(pred_results, gold_results)
+
+    if not pred_success:
+        print(f"FAILED EXECUTION. DB: {db_path}")
+        print(f"Query: {pred_sql}")
+    elif not match:
+        print(f"MISMATCH. Gold: {gold_results} | Pred: {pred_results}")
+    else:
+        print("SUCCESS! Found a valid demo.")
+        
     return 1.0 if match else 0.0
 
 

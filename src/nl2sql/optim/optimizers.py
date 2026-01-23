@@ -250,7 +250,6 @@ class KNNFewShotWrapper(DSPyOptimizerWrapper):
             return dspy.Embedder(st.encode)
 
         elif embed_type == "openai":
-            # hosted embeddings → LiteLLM path is OK
             return embedder_cfg["model"]
 
         else:

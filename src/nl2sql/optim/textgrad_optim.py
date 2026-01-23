@@ -27,11 +27,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 SCHEMAS = load_schemas()
 
-# ==============================================================================
-# Native Logger
-# ==============================================================================
-
-
 class LLMLogger:
     """Simple logger to track student and teacher calls."""
 
@@ -46,10 +41,6 @@ class LLMLogger:
 
 
 llm_logger = LLMLogger()
-
-# ==============================================================================
-# Engines & Graph Wrappers
-# ==============================================================================
 
 
 class TaskEngine:
@@ -66,8 +57,8 @@ class TaskEngine:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.0,
-            max_tokens=250,
-            stop=["Explanation:", "Note:", "To find"],
+            max_tokens=1024,
+            #stop=["Explanation:", "Note:", "To find"],
         )
         content = response.choices[0].message.content
         if not content:
@@ -90,7 +81,7 @@ class NVIDIAGradientEngine:
     def __call__(self, prompt: str, **kwargs) -> str:
         # llm_logger.on_lm_start("teacher", self.model, prompt)
         response = self.client.chat.completions.create(
-            model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.7
+            model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.1
         )
         content = response.choices[0].message.content
         # llm_logger.on_lm_end("teacher", content)
@@ -108,11 +99,6 @@ class SQLModule(tg.Variable):
         return tg.Variable(
             response_text, role_description="model_prediction", predecessors=[self.system_prompt]
         )
-
-
-# ==============================================================================
-# Optimization Helpers
-# ==============================================================================
 
 
 def evaluate(model, dataset, desc="Evaluating"):
@@ -134,21 +120,22 @@ def evaluate(model, dataset, desc="Evaluating"):
     return calculate_metrics(results)
 
 
-# ==============================================================================
-# Main Optimizer
-# ==============================================================================
-
+def summarize(res, k=3):
+    try:
+        return res[:k]
+    except Exception:
+        return str(res)[:500]
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_train", type=int, default=800)
-    parser.add_argument("--num_val", type=int, default=100)
+    parser.add_argument("--num_train", type=int, default=400)
+    parser.add_argument("--num_val", type=int, default=500)
     parser.add_argument("--student_model", type=str, default="TheBloke/CodeLlama-7B-Instruct-AWQ")
     parser.add_argument("--eval_model", type=str, default="meta/llama-3.1-70b-instruct")
     parser.add_argument("--api_base", type=str, default="http://localhost:8000/v1")
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=3)
-    parser.add_argument("--output_dir", type=str, default="results/textgrad_v3")
+    parser.add_argument("--output_dir", type=str, default="results/textgrad")
     args = parser.parse_args()
 
     load_dotenv(find_dotenv())
@@ -179,7 +166,10 @@ def main():
         initial_prompt, requires_grad=True, role_description="system prompt"
     )
     model = SQLModule(system_prompt, task_engine)
-    optimizer = tg.TGD(parameters=[system_prompt])
+    optimizer = tg.TGD(parameters=[system_prompt],verbose=1,
+    gradient_memory=10,engine=eval_engine,constraints=[
+        "Output must be a single SYSTEM prompt.",
+        "Must instruct: output ONLY SQL query, no explanation."])
 
     loss_fn = tg.TextLoss(
         """You are a functional SQL evaluator. 
@@ -215,25 +205,55 @@ def main():
 
             for ex in batch:
                 schema = SCHEMAS.get(ex["db_id"], "")
-                prediction = model.forward(f"Schema:\n{schema}\nQuestion: {ex['question']}")
+                prompt = f"Schema:\n{schema}\n\nQuestion: {ex['question']}\nSQL:"
+                prediction = model.forward(prompt)
                 pred_sql = extract_sql_from_text(prediction.value)
 
                 db_path = get_db_path(ex["db_id"])
                 pred_success, error, pred_res = execute_sql(pred_sql, db_path)
                 gold_success, _, gold_res = execute_sql(ex["sql"], db_path)
 
+                if not gold_success:
+                    continue
+
                 match = False
                 if gold_success and pred_success:
                     match, _ = compare_results(pred_res, gold_res)
+                    
+                evidence = f"""
+DB: {ex['db_id']}
+Schema:
+{schema}
 
-                evidence = f"Pred: {pred_sql}\nGold: {ex['sql']}\nMatch: {match}\nError: {error}"
-                loss_input = tg.Variable(
-                    evidence, predecessors=[prediction], role_description="outcome"
-                )
-                losses.append(loss_fn(loss_input))
+Question: {ex['question']}
 
+Student SQL:
+{pred_sql}
+
+Gold SQL:
+{ex['sql']}
+
+Student exec ok: {pred_success}
+Student error: {error}
+
+Gold exec ok: {gold_success}
+
+Student result sample: {summarize(pred_res)}
+Gold result sample: {summarize(gold_res)}
+
+Match: {match}
+""".strip()     
+                if (not pred_success) or (not match):   
+                    loss_input = tg.Variable(evidence,predecessors=[prediction, system_prompt],role_description="sql_execution_outcome")
+                    losses.append(loss_fn(loss_input))
+            if not losses:
+                continue
             tg.sum(losses).backward()
             optimizer.step()
+            old = system_prompt.value
+            new = system_prompt.value
+            if new != old:
+                logger.info(f"Prompt updated (len {len(old)} -> {len(new)})")
 
         # Checkpoint Revert Logic
         val_metrics = evaluate(model, val_set, desc="Val Check")
