@@ -16,17 +16,22 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+from dotenv import load_dotenv
 
 from datasets import load_dataset
 
-# Reuse your project utilities (same ones you used in TextGrad).
-# If these imports fail, fix PYTHONPATH or run from your repo root.
+# Unified LLM provider and utilities
+from nl2sql.llm import get_llm
+from nl2sql.llm.base import LLMMessage
+from nl2sql.utils import load_optimizer_data, evaluate_sql_predictions, save_evaluation_results, BASELINE_SYSTEM_PROMPT
 from nl2sql.utils.util import (
     load_schemas,
     execute_sql,
     compare_results,
     extract_sql_from_text,
     get_db_path,
+    TokenStats,
+    extract_token_usage,
 )
 
 # Optional: OpenEvolve structured result (newer versions).
@@ -51,152 +56,42 @@ class ExResult:
     pred_error: str
 
 
-def _load_data() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """
-    Returns (train_split, dev_split).
-    We use train for fast fitness sampling, dev for occasional reporting.
-    """
-    train = load_dataset(
-        "AsadIsmail/nl2sql-deduplicated",
-        data_files="spider_clean.jsonl",
-        split="train",
-    )
-    dev = load_dataset(
-        "AsadIsmail/nl2sql-deduplicated",
-        data_files="spider_dev_clean.jsonl",
-        split="train",
-    )
-    return list(train), list(dev)
-
-
-def _ensure_schemas_loaded():
-    global SCHEMAS
-    if SCHEMAS is None:
-        SCHEMAS = load_schemas()
-
-
 def _predict_sql(student_engine, system_prompt: str, schema: str, question: str) -> str:
+    """Predict SQL from question using student engine."""
     prompt = f"Schema:\n{schema}\n\nQuestion: {question}\nSQL:"
     raw = student_engine(prompt, system_prompt)
     return extract_sql_from_text(raw)
 
 
-def _evaluate_on_examples(
-    student_engine,
-    system_prompt: str,
-    examples: List[Dict[str, Any]],
-    max_examples: int,
-    seed: int,
-) -> Tuple[Dict[str, float], List[ExResult]]:
-    _ensure_schemas_loaded()
-    rng = random.Random(seed)
-    if max_examples < len(examples):
-        examples = rng.sample(examples, max_examples)
+class OpenEvolveModelWrapper:
+    """Wrapper to make OpenEvolve student engine compatible with unified evaluation."""
 
-    results: List[ExResult] = []
-    n = 0
-    n_valid = 0
-    n_match = 0
-    n_gold_fail = 0
+    def __init__(self, llm, system_prompt: str):
+        self.llm = llm
+        self.system_prompt = system_prompt
+        self.token_stats = TokenStats()
 
-    for ex in examples:
-        n += 1
-        db_id = ex["db_id"]
-        schema = SCHEMAS.get(db_id, "")
-        q = ex["question"]
-        gold_sql = ex["sql"]
-
-        pred_sql = ""
-        pred_success = False
-        pred_error = ""
-        pred_res = None
-
-        try:
-            pred_sql = _predict_sql(student_engine, system_prompt, schema, q)
-            db_path = get_db_path(db_id)
-            pred_success, pred_error, pred_res = execute_sql(pred_sql, db_path)
-            gold_success, gold_error, gold_res = execute_sql(gold_sql, db_path)
-            if not gold_success:
-                n_gold_fail += 1
-                # Skip gold failures from fitness so you don't optimize toward broken labels
-                results.append(
-                    ExResult(
-                        db_id=db_id,
-                        question=q,
-                        pred_sql=pred_sql,
-                        gold_sql=gold_sql,
-                        pred_success=pred_success,
-                        gold_success=False,
-                        match=False,
-                        pred_error=f"Gold failed: {gold_error}",
-                    )
-                )
-                continue
-
-            match = False
-            if pred_success:
-                n_valid += 1
-                match, _ = compare_results(pred_res, gold_res)
-                if match:
-                    n_match += 1
-
-            results.append(
-                ExResult(
-                    db_id=db_id,
-                    question=q,
-                    pred_sql=pred_sql,
-                    gold_sql=gold_sql,
-                    pred_success=pred_success,
-                    gold_success=True,
-                    match=match,
-                    pred_error=pred_error,
-                )
-            )
-        except Exception as e:
-            results.append(
-                ExResult(
-                    db_id=db_id,
-                    question=q,
-                    pred_sql=pred_sql or "SELECT 'EVAL_EXCEPTION';",
-                    gold_sql=gold_sql,
-                    pred_success=False,
-                    gold_success=True,
-                    match=False,
-                    pred_error=f"Exception: {e}",
-                )
-            )
-
-    denom = max(1, (n - n_gold_fail))
-    metrics = {
-        "n": float(n),
-        "n_gold_failed": float(n_gold_fail),
-        "valid_pct": 100.0 * (n_valid / denom),
-        "exec_match_pct": 100.0 * (n_match / denom),
-    }
-    return metrics, results
-
-
-def _format_failure_artifacts(ex_results: List[ExResult], k: int = 5) -> str:
-    fails = [r for r in ex_results if r.gold_success and (not r.match)]
-    fails = fails[:k]
-    blocks = []
-    for r in fails:
-        blocks.append(
-            "\n".join(
-                [
-                    f"DB: {r.db_id}",
-                    f"Q: {r.question}",
-                    "Pred SQL:",
-                    r.pred_sql,
-                    "Gold SQL:",
-                    r.gold_sql,
-                    f"Pred exec ok: {r.pred_success}",
-                    f"Pred error: {r.pred_error}",
-                    f"Match: {r.match}",
-                ]
-            )
+    def forward(self, prompt: str):
+        """Forward method compatible with evaluate_sql_predictions."""
+        # Use generate() instead of generate_text() to get token usage
+        response = self.llm.generate(
+            messages=[
+                LLMMessage(role="system", content=self.system_prompt),
+                LLMMessage(role="user", content=prompt)
+            ],
+            max_tokens=512,
+            temperature=0.0,
         )
-    return "\n\n---\n\n".join(blocks) if blocks else "No failures in sampled set."
+
+        # Track token usage
+        usage = extract_token_usage(response.usage)
+        self.token_stats.add(usage["prompt_tokens"], usage["completion_tokens"])
+
+        # Return a simple object with .value attribute for compatibility
+        class Response:
+            def __init__(self, content):
+                self.value = content
+        return Response(response.content)
 
 
 def evaluate(program_path: str) -> Any:
@@ -204,70 +99,69 @@ def evaluate(program_path: str) -> Any:
     OpenEvolve entry point. `program_path` points to the evolved candidate (text prompt).
     Returns either EvaluationResult (if available) or a dict with a `score` key.
     """
+    # Load .env files from current directory AND project root
+    load_dotenv()  # Current directory
+    load_dotenv(Path(__file__).parent.parent.parent / ".env")  # Project root
+
     try:
         prompt_path = Path(program_path)
         system_prompt = prompt_path.read_text(encoding="utf-8").strip()
         if not system_prompt:
-            system_prompt = "Convert natural language to SQL. Output only the query."
+            system_prompt = BASELINE_SYSTEM_PROMPT
 
-        # ---- Student model access ----
-        # We assume you're using an OpenAI-compatible local server (vLLM / SGLang / etc)
-        # like in your TextGrad script.
-        from openai import OpenAI
+        # Student model access
+        student_model_name = os.getenv("STUDENT_MODEL", "codellama_7b")
+        llm = get_llm(student_model_name)
 
-        api_base = os.getenv("OPENAI_API_BASE", "http://localhost:8000/v1")
-        student_model = os.getenv("STUDENT_MODEL", "TheBloke/CodeLlama-7B-Instruct-AWQ")
-        client = OpenAI(base_url=api_base, api_key=os.getenv("OPENAI_API_KEY", "dummy"), timeout=300.0)
+        # Load data using unified data loader
+        train, _, dev = load_optimizer_data(format="dict")
 
-        def student_engine(user_prompt: str, sys_prompt: str) -> str:
-            resp = client.chat.completions.create(
-                model=student_model,
-                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}],
-                temperature=0.0,
-                max_tokens=int(os.getenv("STUDENT_MAX_TOKENS", "512")),
-            )
-            return resp.choices[0].message.content or ""
-
-        train, _dev = _load_data()
-
-        # Fitness sampling (keep it small; OpenEvolve runs many iterations)
+        # Fitness sampling
         stage1_n = int(os.getenv("FITNESS_SAMPLES", "40"))
-        seed = int(os.getenv("EVAL_SEED", "42"))
+        eval_subset = train[:stage1_n]
 
-        metrics, ex_results = _evaluate_on_examples(
-            student_engine=student_engine,
-            system_prompt=system_prompt,
-            examples=train,
-            max_examples=stage1_n,
-            seed=seed,
-        )
+        # Create model wrapper for unified evaluation (pass llm directly)
+        model_wrapper = OpenEvolveModelWrapper(llm, system_prompt)
 
-        # Score in [0,1] (OpenEvolve expects higher=better)
-        score = metrics["exec_match_pct"] / 100.0
+        # Evaluate using unified evaluation function
+        from nl2sql.utils.optimizer_eval import EvaluationResult as UnifiedEvalResult
 
-        # Artifacts to support LLM feedback in OpenEvolve (when enabled in config).
-        artifacts = {
-            "summary": (
-                f"exec_match_pct={metrics['exec_match_pct']:.2f} "
-                f"valid_pct={metrics['valid_pct']:.2f} "
-                f"n={int(metrics['n'])} gold_failed={int(metrics['n_gold_failed'])}"
-            ),
-            "failures": _format_failure_artifacts(ex_results, k=5),
-            "prompt_char_len": len(system_prompt),
-        }
+        eval_result = evaluate_sql_predictions(model_wrapper, eval_subset, model_type="openevolve")
 
+        # Add token statistics
+        eval_result.token_stats = model_wrapper.token_stats.to_dict()
+
+        # Extract metrics
+        metrics = eval_result.metrics
+        score = metrics.get("result_match_pct", 0.0) / 100.0
+
+        # Build output metrics for OpenEvolve
         out_metrics = {
             "score": score,
-            "exec_match_pct": metrics["exec_match_pct"],
-            "combined_score": metrics["exec_match_pct"],
-            "valid_pct": metrics["valid_pct"],
+            "exec_match_pct": metrics.get("result_match_pct", 0.0),
+            "combined_score": metrics.get("result_match_pct", 0.0),
+            "valid_pct": metrics.get("valid_sql_pct", 0.0),
             "prompt_char_len": float(len(system_prompt)),
         }
 
-        if EvaluationResult is not None:
-            return EvaluationResult(metrics=out_metrics, artifacts=artifacts)
+        # Save results if OUTPUT_DIR is set
+        output_dir = os.getenv("OUTPUT_DIR")
+        if output_dir:
+            print(f"\nSaving results to {output_dir}...")
+            artifacts = {"best_system_prompt.txt": system_prompt}
 
-        out_metrics["artifacts"] = artifacts
+            save_evaluation_results(
+                result=eval_result,
+                output_dir=output_dir,
+                title="OpenEvolve Optimization Results",
+                model_name=student_model_name,
+                dataset_name="Spider (sampled)",
+                artifacts=artifacts,
+            )
+
+        if EvaluationResult is not None:
+            return EvaluationResult(metrics=out_metrics)
+
         return out_metrics
 
     except Exception:
