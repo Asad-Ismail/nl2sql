@@ -98,9 +98,16 @@ nl2sql-baseline --model gpt4o --num-samples 100
 
 # Full evaluation (all 1,034 Spider dev examples)
 nl2sql-baseline --model codellama_7b
+
+# Customize methods and retrieval
+nl2sql-baseline --model codellama_7b --methods zero_shot few_shot
+nl2sql-baseline --model codellama_7b --retriever semantic
+nl2sql-baseline --model codellama_7b --methods few_shot --retriever semantic
 ```
 
 **Available models:** `codellama_7b`, `deepseek_coder_7b`, `mistral_7b`, `claude_sonnet`, `llama_70b_nvidia`, `gpt4o`, etc. (see `src/nl2sql/optim/configs/llm/providers.yaml`)
+
+**Default settings:** Runs all 3 methods (zero-shot, few-shot, self-correction) with BM25 retrieval for few-shot examples.
 
 Results saved to `results/baseline_<model>/` with detailed reports.
 
