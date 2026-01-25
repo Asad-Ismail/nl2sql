@@ -74,8 +74,16 @@ cp .env.example .env
 Evaluate 3 baseline approaches (zero-shot, few-shot, self-correction) on Spider dev set:
 
 ```bash
-# Local vLLM model (start server first)
-vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ --host 0.0.0.0 --port 8000
+# Start vLLM server (REQUIRED for local model evaluation)
+vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --quantization awq \
+    --gpu-memory-utilization 0.8 \
+    --max-model-len 8048 \
+    --chat-template models/codellama_chat.jinja
+
+# Then run baseline evaluation in another terminal
 nl2sql-baseline --model codellama_7b --num-samples 100
 
 # Cloud providers (no server needed, just set API key)
