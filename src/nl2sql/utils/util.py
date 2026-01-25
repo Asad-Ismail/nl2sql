@@ -437,6 +437,13 @@ def save_evaluation_results(results: Any, output_dir: str, prefix: str = "result
     if isinstance(results, dict):
         # Dict of lists (e.g., {"zero_shot": [...], "few_shot": [...]})
         for method, data in results.items():
+            # Skip non-list items (e.g., token_stats dict)
+            if not isinstance(data, list):
+                filepath = output_path / f"{method}_results.jsonl"
+                with open(filepath, "w") as f:
+                    f.write(json.dumps(data) + "\n")
+                continue
+
             filepath = output_path / f"{method}_results.jsonl"
             with open(filepath, "w") as f:
                 for item in data:
@@ -549,3 +556,66 @@ def generate_markdown_report(
         f.write(report)
 
     return str(report_path)
+
+
+# ==============================================================================
+# Token Usage Tracking
+# ==============================================================================
+
+
+class TokenStats:
+    """Track token usage and LLM calls across evaluation"""
+
+    def __init__(self) -> None:
+        """Initialize token statistics"""
+        self.total_prompt_tokens: int = 0
+        self.total_completion_tokens: int = 0
+        self.total_tokens: int = 0
+        self.total_calls: int = 0
+
+    def add(self, prompt_tokens: int, completion_tokens: int) -> None:
+        """
+        Add token counts from a single LLM call
+
+        Args:
+            prompt_tokens: Number of tokens in the prompt
+            completion_tokens: Number of tokens in the completion
+        """
+        self.total_prompt_tokens += prompt_tokens
+        self.total_completion_tokens += completion_tokens
+        self.total_tokens += prompt_tokens + completion_tokens
+        self.total_calls += 1
+
+    def to_dict(self) -> Dict[str, int]:
+        """
+        Convert to dictionary for serialization
+
+        Returns:
+            Dictionary with all token statistics
+        """
+        return {
+            "total_prompt_tokens": self.total_prompt_tokens,
+            "total_completion_tokens": self.total_completion_tokens,
+            "total_tokens": self.total_tokens,
+            "total_calls": self.total_calls,
+        }
+
+
+def extract_token_usage(usage: Optional[Dict[str, int]]) -> Dict[str, int]:
+    """
+    Extract token usage from LLMResponse.usage dict
+
+    Args:
+        usage: Usage dictionary from LLMResponse with keys like
+               'prompt_tokens', 'completion_tokens', 'total_tokens'
+
+    Returns:
+        Dictionary with extracted token counts (0 if not available)
+    """
+    if not usage:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    return {
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+    }

@@ -19,7 +19,11 @@ from typing import Dict, List, Optional, Tuple
 from tqdm import tqdm
 import time
 from datasets import load_dataset
+from rank_bm25 import BM25Okapi
+import re
 from nl2sql.llm.factory import get_llm
+from nl2sql.llm.base import LLMMessage
+from nl2sql.utils.prompts import ZERO_SHOT_PROMPT, BASELINE_SYSTEM_PROMPT, BASELINE_USER_PROMPT_TEMPLATE
 from nl2sql.utils.util import (
     load_schemas,
     execute_sql,
@@ -30,6 +34,8 @@ from nl2sql.utils.util import (
     categorize_sql_complexity,
     save_evaluation_results,
     generate_markdown_report,
+    TokenStats,
+    extract_token_usage,
 )
 
 
@@ -68,6 +74,65 @@ Answer:"""
         return compare_results(generated_results, gold_results)
 
 
+class BM25Retriever:
+    """Retrieve similar examples using BM25 ranking"""
+
+    def __init__(self, corpus: List[Dict]):
+        """
+        Initialize BM25 retriever with a corpus of examples
+
+        Args:
+            corpus: List of examples with 'question' field
+        """
+        self.corpus = corpus
+        # Tokenize questions for BM25
+        tokenized_corpus = [self._tokenize(ex["question"]) for ex in corpus]
+        self.bm25 = BM25Okapi(tokenized_corpus)
+
+    def _tokenize(self, text: str) -> List[str]:
+        """
+        Simple tokenization for BM25
+
+        Args:
+            text: Input text to tokenize
+
+        Returns:
+            List of lowercase tokens
+        """
+        # Convert to lowercase and split on whitespace/punctuation
+        text = text.lower()
+        # Keep alphanumeric characters and spaces
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        # Split on whitespace
+        tokens = text.split()
+        return tokens
+
+    def retrieve(self, query: str, k: int = 2, exclude_indices: Optional[List[int]] = None) -> List[Dict]:
+        """
+        Retrieve top-k most similar examples using BM25
+
+        Args:
+            query: Question to find similar examples for
+            k: Number of examples to retrieve
+            exclude_indices: Optional list of indices to exclude (e.g., current example)
+
+        Returns:
+            List of k most similar examples
+        """
+        tokenized_query = self._tokenize(query)
+        scores = self.bm25.get_scores(tokenized_query)
+
+        # Get top-k indices
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+
+        # Filter out excluded indices
+        if exclude_indices:
+            top_indices = [i for i in top_indices if i not in exclude_indices]
+
+        # Return top-k examples
+        return [self.corpus[i] for i in top_indices[:k]]
+
+
 class SpiderEvaluator:
     """Evaluate baseline approaches on Spider dataset using unified LLM provider system"""
 
@@ -88,6 +153,7 @@ class SpiderEvaluator:
         self.llm = None
         self.semantic_validator = None
         self.schemas = load_schemas()
+        self.token_stats = TokenStats()
 
     def load_dataset_from_hf(self, num_samples: Optional[int] = None) -> List[Dict]:
         """
@@ -179,18 +245,35 @@ class SpiderEvaluator:
         # Initialize semantic validator
         self.semantic_validator = SemanticValidator(self.generate_sql)
 
-    def generate_sql(self, prompt: str, max_new_tokens: int = 1024) -> str:
-        """Generate SQL using unified LLM provider"""
+    def generate_sql(
+        self, user_prompt: str, system_prompt: str = None, max_new_tokens: int = 1024
+    ) -> str:
+        """Generate SQL using unified LLM provider
+
+        Args:
+            user_prompt: The user prompt (schema, question, etc.)
+            system_prompt: Optional system prompt (task instruction)
+            max_new_tokens: Maximum tokens to generate
+        """
         try:
             # Use LLMFactory provider (rate limiting handled automatically)
-            generated = self.llm.generate_text(
-                prompt=prompt,
+            # Need to use generate() instead of generate_text() to get usage info
+            messages = []
+            if system_prompt:
+                messages.append(LLMMessage(role="system", content=system_prompt))
+            messages.append(LLMMessage(role="user", content=user_prompt))
+            response = self.llm.generate(
+                messages=messages,
                 max_tokens=max_new_tokens,
                 temperature=0.0,
                 stop=["\n\n", "###"],
             )
 
-            sql = self._extract_sql(generated)
+            # Track token usage
+            usage = extract_token_usage(response.usage)
+            self.token_stats.add(usage["prompt_tokens"], usage["completion_tokens"])
+
+            sql = self._extract_sql(response.content)
             return sql.strip()
 
         except Exception as e:
@@ -208,18 +291,10 @@ class SpiderEvaluator:
     def zero_shot(self, question: str, schema: str, db_path: str, gold_sql: str = None) -> Dict:
         """Baseline 1: Single LLM call without examples"""
 
-        prompt = f"""### Task: Convert the following natural language question to a SQL query.  Give only SQL Query as Output
-
-### Database Schema:
-{schema}
-
-### Question: {question}
-
-### SQL Query:
-"""
+        user_prompt = BASELINE_USER_PROMPT_TEMPLATE.format(schema=schema, question=question)
 
         start_time = time.time()
-        sql = self.generate_sql(prompt, max_new_tokens=250)
+        sql = self.generate_sql(user_prompt, system_prompt=BASELINE_SYSTEM_PROMPT, max_new_tokens=250)
         inference_time = time.time() - start_time
 
         # Execute generated SQL
@@ -254,23 +329,26 @@ class SpiderEvaluator:
     ) -> Dict:
         """Baseline 2: Few-shot with similar examples"""
 
-        prompt = "### Task: Convert natural language questions to SQL queries.  Give only SQL Query as Output \n\n"
-        prompt += "### Examples:\n\n"
+        # System prompt: task instruction
+        system_prompt = "### Task: Convert natural language questions to SQL queries. Give only SQL Query as Output"
+
+        # User prompt: examples + current question
+        user_prompt = "### Examples:\n\n"
 
         # Add 2-3 examples
         for i, ex in enumerate(examples[:2], 1):
-            prompt += f"**Example {i}:**\n"
-            prompt += f"Schema: {ex.get('context', 'N/A')}\n"
-            prompt += f"Question: {ex['question']}\n"
-            prompt += f"SQL: {ex.get('query', ex.get('sql', ''))}\n\n"
+            user_prompt += f"**Example {i}:**\n"
+            user_prompt += f"Schema: {ex.get('context', 'N/A')}\n"
+            user_prompt += f"Question: {ex['question']}\n"
+            user_prompt += f"SQL: {ex.get('query', ex.get('sql', ''))}\n\n"
 
-        prompt += "### Now convert this question:\n"
-        prompt += f"Schema:\n{schema}\n\n"
-        prompt += f"Question: {question}\n\n"
-        prompt += "SQL Query:\n"
+        user_prompt += "### Now convert this question:\n"
+        user_prompt += f"Schema:\n{schema}\n\n"
+        user_prompt += f"Question: {question}\n\n"
+        user_prompt += "SQL Query:\n"
 
         start_time = time.time()
-        sql = self.generate_sql(prompt, max_new_tokens=250)
+        sql = self.generate_sql(user_prompt, system_prompt=system_prompt, max_new_tokens=250)
         inference_time = time.time() - start_time
 
         # Execute generated SQL
@@ -326,18 +404,11 @@ class SpiderEvaluator:
         best_attempt = None
         best_results = None
 
-        prompt = f"""### Task: Convert the following natural language question to a SQL query. Give only SQL Query as Output
+        user_prompt = BASELINE_USER_PROMPT_TEMPLATE.format(schema=schema, question=question)
 
-### Database Schema:
-{schema}
-
-### Question: {question}
-
-### SQL Query:
-"""
         for attempt_num in range(max_attempts):
             # Generate SQL
-            sql = self.generate_sql(prompt, max_new_tokens=1024)
+            sql = self.generate_sql(user_prompt, system_prompt=BASELINE_SYSTEM_PROMPT, max_new_tokens=1024)
             ## handle empty sql
             if not sql or not sql.strip():
                 attempt_record = {
@@ -466,6 +537,11 @@ class SpiderEvaluator:
         print(f"Evaluating on {len(data)} examples\n")
         print(f"Printing intermediate results every {print_every} examples\n")
 
+        # Initialize BM25 retriever for few-shot learning
+        print("Initializing BM25 retriever for few-shot example selection...")
+        bm25_retriever = BM25Retriever(data)
+        print("✓ BM25 retriever ready\n")
+
         # Load model
         self.load_model()
 
@@ -513,8 +589,8 @@ class SpiderEvaluator:
                     if method_name == "zero_shot":
                         result = self.zero_shot(question, schema, db_path, gold_sql)
                     elif method_name == "few_shot":
-                        # Use previous examples as few-shot examples
-                        examples = data[max(0, i - 5) : i] if i > 0 else data[1:4]
+                        # Use BM25 to retrieve most similar examples
+                        examples = bm25_retriever.retrieve(question, k=2, exclude_indices=[i])
                         result = self.few_shot(question, schema, db_path, examples, gold_sql)
                     else:  # self_correction with semantic feedback
                         result = self.self_correction(question, schema, db_path, gold_sql)
@@ -581,6 +657,9 @@ class SpiderEvaluator:
                         }
                     )
 
+        # Add token statistics to results
+        results["token_stats"] = self.token_stats.to_dict()
+
         # Save results and generate report
         self._save_results(results, output_dir)
         self._generate_report(results, output_dir, complexity_metrics)
@@ -602,6 +681,10 @@ class SpiderEvaluator:
         # Calculate metrics for each method
         all_metrics = {}
         for method, data in results.items():
+            # Skip non-list items (e.g., token_stats)
+            if not isinstance(data, list):
+                continue
+
             metrics = calculate_metrics(data)
             metrics["avg_attempts"] = (
                 sum(r.get("num_attempts", 1) for r in data) / len(data) if data else 0
@@ -619,6 +702,18 @@ class SpiderEvaluator:
             print(f"  Avg time: {metrics['avg_inference_time']:.2f}s")
             print(f"  Avg attempts: {metrics['avg_attempts']:.1f}")
             print()
+
+        # Print overall token statistics
+        if "token_stats" in results:
+            ts = results["token_stats"]
+            print(f"{'='*60}")
+            print("OVERALL TOKEN STATISTICS")
+            print(f"{'='*60}")
+            print(f"  Total LLM Calls:        {ts['total_calls']:,}")
+            print(f"  Total Prompt Tokens:    {ts['total_prompt_tokens']:,}")
+            print(f"  Total Completion Tokens: {ts['total_completion_tokens']:,}")
+            print(f"  Total Tokens:            {ts['total_tokens']:,}")
+            print(f"{'='*60}\n")
 
         # Build summary table
         summary_table = "| Method | Valid SQL % | Results Match % | Avg Time (s) | Avg Attempts |\n"
