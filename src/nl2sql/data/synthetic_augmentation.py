@@ -1,7 +1,7 @@
 """
 Synthetic Data Generation for NL2SQL Training
 
-Novel approach: Generate realistic variations of existing queries to expand training data
+Generates variations of existing queries:
 - Paraphrase questions (same SQL, different wording)
 - Schema shuffling (change table/column names, keep SQL logic)
 - Query augmentation (add/remove conditions while maintaining validity)
@@ -287,7 +287,7 @@ class SyntheticDataGenerator:
                 if total_original % 100 == 0:
                     print(f"Processed {total_original} examples, generated {total_generated} total")
 
-        print("\n✓ Complete!")
+        print("\n[OK] Complete!")
         print(f"  Original examples: {total_original}")
         print(f"  Generated examples: {total_generated}")
         print(f"  Expansion rate: {total_generated/total_original:.1f}x")

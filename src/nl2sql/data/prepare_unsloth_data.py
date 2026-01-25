@@ -255,7 +255,7 @@ class UnslothDatasetPreparer:
         tables_json = self.data_dir / "database" / "spider_data" / "tables.json"
 
         if not tables_json.exists():
-            print(f"⚠️  Warning: {tables_json} not found, Spider schemas will not be enriched")
+            print(f"[WARNING] {tables_json} not found, Spider schemas will not be enriched")
             return {}
 
         try:
@@ -283,11 +283,11 @@ class UnslothDatasetPreparer:
 
                 schemas[db_id] = "\n".join(schema_lines)
 
-            print(f"✓ Loaded {len(schemas)} Spider database schemas")
+            print(f"[OK] Loaded {len(schemas)} Spider database schemas")
             return schemas
 
         except Exception as e:
-            print(f"⚠️  Error loading schemas: {e}")
+            print(f"[ERROR] loading schemas: {e}")
             return {}
 
     def load_jsonl(self, filepath: Path) -> List[Dict]:
@@ -457,7 +457,7 @@ class UnslothDatasetPreparer:
 
         for name, config in datasets:
             if not config["file"].exists():
-                print(f"\n⚠️  Skipping {name}: file not found")
+                print(f"\n[SKIPPING] {name}: file not found")
                 continue
 
             self.process_dataset(name, config["file"])
@@ -503,7 +503,7 @@ class UnslothDatasetPreparer:
         eval_file = self.data_dir / "eval" / "spider_dev.jsonl"
 
         if not eval_file.exists():
-            print(f"⚠️  Eval file not found: {eval_file}")
+            print(f"[NOT FOUND] Eval file: {eval_file}")
             return []
 
         # Load and validate (no deduplication for eval)
@@ -533,7 +533,7 @@ class UnslothDatasetPreparer:
         if cleaned:
             output_file = self.output_dir / "spider_dev_clean.jsonl"
             count = self.save_jsonl(cleaned, output_file)
-            print(f"  ✓ Saved to: {output_file} ({count:,} examples)")
+            print(f"  [OK] Saved to: {output_file} ({count:,} examples)")
 
         return cleaned
 
@@ -595,7 +595,7 @@ class UnslothDatasetPreparer:
         with open(stats_file, "w") as f:
             json.dump(self.stats, f, indent=2)
 
-        print(f"\n✓ Statistics saved to: {stats_file}")
+        print(f"\n[OK] Statistics saved to: {stats_file}")
 
     def print_summary(self, config: Dict):
         """Print final summary"""
@@ -603,7 +603,7 @@ class UnslothDatasetPreparer:
         print("PREPARATION COMPLETE")
         print("=" * 70)
 
-        print("\n📊 Overall Statistics:")
+        print("\nOverall Statistics:")
         print(f"  Strategy: {self.stats['deduplication_strategy']}")
         print(f"  Total loaded: {self.stats['total_loaded']:,}")
         print(f"  Spider enriched with schemas: {self.stats['spider_enriched']:,}")
@@ -615,7 +615,7 @@ class UnslothDatasetPreparer:
             f"  Reduction: {100 * (1 - self.stats['valid_unique'] / self.stats['total_loaded']):.1f}%"
         )
 
-        print("\n📁 Per-Dataset Contribution (after global deduplication):")
+        print("\nPer-Dataset Contribution (after global deduplication):")
         for name, stats in self.stats["per_dataset"].items():
             if name == "spider_dev":
                 continue
@@ -626,18 +626,18 @@ class UnslothDatasetPreparer:
                 f"(invalid: {stats['invalid']}, duplicates: {stats['duplicate']})"
             )
 
-        print("\n⚖️  Recommended Weights for Unsloth Training:")
+        print("\nRecommended Weights for Unsloth Training:")
         for name, info in config["datasets"].items():
             print(f"  {name:.<20} weight={info['weight']:.2f}  " f"({info['reason']})")
 
-        print("\n📂 Output Files:")
+        print("\nOutput Files:")
         print(f"  Directory: {self.output_dir}/")
         print("  Training datasets: *_clean.jsonl (separated for weighting)")
         print("  Eval dataset: spider_dev_clean.jsonl")
         print("  Config: unsloth_config.json")
         print("  Stats: preparation_stats.json")
 
-        print("\n🚀 Next Steps:")
+        print("\nNext steps:")
         print("  1. Review weights in unsloth_config.json")
         print("  2. Adjust weights based on your training goals")
         print("  3. Use separate files for weighted sampling in Unsloth")
@@ -661,7 +661,7 @@ def main():
     config_file = preparer.output_dir / "unsloth_config.json"
     with open(config_file, "w") as f:
         json.dump(config, f, indent=2)
-    print(f"\n✓ Config saved to: {config_file}")
+    print(f"\n[OK] Config saved to: {config_file}")
 
     # Save statistics
     preparer.save_statistics()
@@ -669,7 +669,7 @@ def main():
     # Print summary
     preparer.print_summary(config)
 
-    print("\n✅ Dataset preparation complete!")
+    print("\n[OK] Dataset preparation complete!")
 
 
 if __name__ == "__main__":
