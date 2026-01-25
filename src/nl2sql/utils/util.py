@@ -524,15 +524,18 @@ def generate_markdown_report(
     # Check if metrics is a single dict or dict of dicts (multiple methods)
     if isinstance(metrics, dict) and any(isinstance(v, dict) for v in metrics.values()):
         # Multiple methods (e.g., baseline with zero_shot, few_shot, etc.)
-        report += "| Method | Valid SQL % | Results Match % | Avg Time (s) |\n"
-        report += "|--------|-------------|-----------------|-------------|\n"
+        report += "| Method | Valid SQL % | Results Match % | Total Tokens | LLM Calls |\n"
+        report += "|--------|-------------|-----------------|--------------|----------|\n"
 
         for method_name, method_metrics in metrics.items():
             if isinstance(method_metrics, dict) and "valid_sql_pct" in method_metrics:
                 report += f"| {method_name.replace('_', ' ').title()} | "
                 report += f"{method_metrics['valid_sql_pct']:.1f}% | "
                 report += f"{method_metrics['result_match_pct']:.1f}% | "
-                report += f"{method_metrics.get('avg_inference_time', 0):.2f} |\n"
+                total_tokens = method_metrics.get('total_tokens', 0)
+                report += f"{total_tokens:,} | " if total_tokens > 0 else "| N/A | "
+                total_calls = method_metrics.get('total_calls', 0)
+                report += f"{total_calls:,} |\n" if total_calls > 0 else "| N/A |\n"
     else:
         # Single method metrics
         if "total_examples" in metrics:

@@ -28,31 +28,36 @@ Performance on Spider dev set (1,034 examples):
 
 ### CodeLlama-7B Results
 
-| Method | Valid SQL % | Execution Match % | Avg Time (s) | Notes |
-|--------|-------------|-------------------|--------------|-------|
-| **Baseline Methods** |
-| Zero-Shot | 83.7% | 57.3% | 10.70s | Fast baseline |
-| Few-Shot | 83.8% | 56.7% | 10.96s | Degraded performance ([see analysis](https://asad-ismail.github.io/)) |
-| Self-Correction | 87.8% | 58.7% | 75.53s | +1.4% gain, but 7x slower |
+| Method | Valid SQL % | Execution Match % | Total Tokens | LLM Calls | Notes |
+|--------|-------------|-------------------|--------------|-----------|-------|
+| **Baseline Methods (Random Examples)** |
+| Zero-Shot | 83.7% | 57.3% | N/A | N/A | Fast baseline |
+| Few-Shot (random) | 83.8% | 56.7% | N/A | N/A | Random examples degraded performance |
+| Self-Correction | 87.8% | 58.7% | N/A | N/A | +1.4% gain, but 7x slower |
+| **Baseline Methods (BM25 Retrieval)** |
+| Zero-Shot | 83.8% | 57.2% | 657K | 1,034 | Same performance |
+| Few-Shot (BM25) | **90.5%** | **74.1%** | 2.73M | 3,102 | **+17% gain with semantic retrieval** |
+| Self-Correction | 87.9% | 59.0% | 5.46M | 7,613 | Minimal gain over zero-shot |
 | **Optimized Methods** |
-| DSPy (MIPRO) | 84.0% | 59.0% | ~0s* | Matches Self-Correction instantly |
+| DSPy (MIPRO) | 84.0% | 59.0% | ~0s* | ~0* | Matches Self-Correction instantly |
 | **Fine-Tuned** |
-| Unsloth LoRA | **90.1%** | **73.0%** | 2.50s | **Best 7B Result (+14% gain)** |
+| Unsloth LoRA | **90.1%** | **73.0%** | N/A | N/A | **Best 7B Result (+14% gain)** |
 
 ### Llama-3-70B Reference
 
-| Method | Valid SQL % | Execution Match % | Avg Time (s) | Notes |
-|--------|-------------|-------------------|--------------|-------|
-| Zero-Shot | 98.8% | 78.3% | 4.34s | Large model ceiling |
-| Self-Correction | 99.4% | 79.7% | 33.71s | State-of-the-art range |
+| Method | Valid SQL % | Execution Match % | Notes |
+|--------|-------------|-------------------|-------|
+| Zero-Shot | 98.8% | 78.3% | Large model ceiling |
+| Self-Correction | 99.4% | 79.7% | State-of-the-art range |
 
 *DSPy optimization time amortized across queries after initial training
 
 **Key Findings:**
-- **Fine-tuning wins**: LoRA fine-tuning delivers the best results for 7B models (+14% execution accuracy)
-- **DSPy efficiency**: Matches self-correction performance without runtime overhead
-- **Few-shot paradox**: Adding examples degraded performance (discussed in [blog analysis](https://asad-ismail.github.io/))
-- **70B ceiling**: Large models approach 80% execution accuracy, setting the performance ceiling
+- **BM25 Few-Shot wins**: Semantic example retrieval delivers +17% gain (74.1% vs 57.2%)
+- **Random few-shot fails**: Random examples degraded performance (56.7% vs 57.3%)
+- **Fine-tuning competitive**: LoRA matches BM25 few-shot (73.0% vs 74.1%)
+- **Self-correction marginal**: Only +2% gain for 3x more LLM calls
+- **70B ceiling**: Large models approach 80% execution accuracy
 
 ## Installation
 

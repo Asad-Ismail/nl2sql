@@ -686,9 +686,6 @@ class SpiderEvaluator:
                 continue
 
             metrics = calculate_metrics(data)
-            metrics["avg_attempts"] = (
-                sum(r.get("num_attempts", 1) for r in data) / len(data) if data else 0
-            )
             all_metrics[method] = metrics
 
             # Print to console
@@ -699,8 +696,6 @@ class SpiderEvaluator:
             print(
                 f"  Results Match Gold: {metrics['result_match_count']}/{metrics['total_examples']} ({metrics['result_match_pct']:.1f}%)"
             )
-            print(f"  Avg time: {metrics['avg_inference_time']:.2f}s")
-            print(f"  Avg attempts: {metrics['avg_attempts']:.1f}")
             print()
 
         # Print overall token statistics
@@ -716,15 +711,13 @@ class SpiderEvaluator:
             print(f"{'='*60}\n")
 
         # Build summary table
-        summary_table = "| Method | Valid SQL % | Results Match % | Avg Time (s) | Avg Attempts |\n"
-        summary_table += "|--------|-------------|-----------------|--------------|-------------|\n"
+        summary_table = "| Method | Valid SQL % | Results Match % |\n"
+        summary_table += "|--------|-------------|-----------------|\n"
 
         for method, metrics in all_metrics.items():
             summary_table += f"| {method.replace('_', ' ').title()} | "
             summary_table += f"{metrics['valid_sql_pct']:.1f}% | "
-            summary_table += f"{metrics['result_match_pct']:.1f}% | "
-            summary_table += f"{metrics['avg_inference_time']:.2f} | "
-            summary_table += f"{metrics['avg_attempts']:.1f} |\n"
+            summary_table += f"{metrics['result_match_pct']:.1f}% |\n"
 
         # Build complexity breakdown for each method
         complexity_section = ""
