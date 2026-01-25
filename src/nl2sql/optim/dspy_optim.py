@@ -23,6 +23,7 @@ from nl2sql.utils.util import (
     generate_markdown_report,
     get_db_path,
     load_schemas,
+    TokenStats,
 )
 
 from .config import DSPyOptimizerConfig, cli_args_to_config_overrides, load_config
@@ -61,6 +62,41 @@ class LLMLogger(BaseCallback):
         else:
             print(f"OUTPUT:  {outputs}")
         print(f"{'='*57}\n")
+
+
+class TokenUsageTracker:
+    """Track token usage from DSPy LM history."""
+
+    def __init__(self):
+        self.stats = TokenStats()
+        self.tracked_lms = []
+
+    def add_usage(self, model: str, usage: dict) -> None:
+        """Called by DSPy when an LLM call completes (only for non-cached calls)."""
+        if usage:
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            self.stats.add(prompt_tokens, completion_tokens)
+
+    def track_lm(self, lm):
+        """Register an LM to track its history later."""
+        self.tracked_lms.append(lm)
+
+    def collect_from_history(self):
+        """Collect usage from LM history after completion."""
+        for lm in self.tracked_lms:
+            if hasattr(lm, 'history'):
+                for entry in lm.history:
+                    usage = entry.get('usage', {})
+                    if usage and isinstance(usage, dict):
+                        prompt_tokens = usage.get('prompt_tokens', 0)
+                        completion_tokens = usage.get('completion_tokens', 0)
+                        if prompt_tokens or completion_tokens:
+                            self.stats.add(prompt_tokens, completion_tokens)
+
+    def get_token_stats(self) -> dict:
+        """Return token statistics."""
+        return self.stats.to_dict()
 
 
 class TextToSQL(dspy.Signature):
@@ -161,20 +197,35 @@ def setup_logging(config: DSPyOptimizerConfig):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
     llm_logger = LLMLogger(enabled=config.logging.enable_llm_logger)
+    token_tracker = TokenUsageTracker()
+
+    # Enable DSPy's built-in usage tracking
+    # Note: usage_tracker is accessed via dspy.settings.usage_tracker, not via configure()
+    dspy.settings.usage_tracker = token_tracker
     dspy.configure(callbacks=[llm_logger])
 
+    # Verify it's set
+    print(f"🔧 Token tracker set: {dspy.settings.usage_tracker is not None}")
+    print(f"🔧 Token tracker type: {type(dspy.settings.usage_tracker)}")
 
-def setup_lms(config: DSPyOptimizerConfig):
+    return token_tracker
+
+
+def setup_lms(config: DSPyOptimizerConfig, token_tracker=None):
     """Initialize Student and Teacher LMs from config."""
     student_cfg = config.models.student
 
     print(f"Config osf sttudent is {student_cfg}")
+    # Use DSPy's built-in LM with OpenAI-compatible provider
+    # Note: cache disabled to enable accurate token tracking for comparison with other methods
     student_lm = dspy.LM(
         model=student_cfg.name,
+        model_type="chat",
         api_base=student_cfg.api_base,
         api_key=student_cfg.api_key,
         max_tokens=student_cfg.max_tokens,
         temperature=student_cfg.temperature,
+        cache=False,  # Required for token usage tracking
     )
     dspy.configure(lm=student_lm)
 
@@ -184,9 +235,11 @@ def setup_lms(config: DSPyOptimizerConfig):
         teacher_cfg = config.models.teacher
         teacher_lm = dspy.LM(
             model=teacher_cfg.name,
-            api_key=teacher_cfg.api_key or os.getenv("NVIDIA_API_KEY"),
+            model_type="chat",
             api_base=teacher_cfg.api_base,
+            api_key=teacher_cfg.api_key or os.getenv("NVIDIA_API_KEY"),
             temperature=teacher_cfg.temperature,
+            cache=False,  # Required for token usage tracking
         )
 
     return student_lm, teacher_lm
@@ -247,20 +300,29 @@ def run_optimization(config: DSPyOptimizerConfig):
     tuple
         (compiled_module, optimized_metrics)
     """
-    setup_logging(config)
+    token_tracker = setup_logging(config)
     output_dir = config.experiment.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
     compiled = None
     try:
-        student_lm, teacher_lm = setup_lms(config)
+        student_lm, teacher_lm = setup_lms(config, token_tracker=token_tracker)
+
+        # Register LMs for tracking
+        token_tracker.track_lm(student_lm)
+        if teacher_lm:
+            token_tracker.track_lm(teacher_lm)
+
         trainset, valset, devset = load_and_prep_data(config)
+
+        # For quick testing, limit evaluation size when train_size is small
+        eval_set = devset[:10] if config.data.splits.train_size <= 5 else devset
 
         b_metrics = None
         if config.evaluation.run_baseline:
             logger.info("Running Baseline Evaluation...")
             baseline = SQLModule(use_cot=config.module.use_cot)
-            _, b_metrics, _ = evaluate_module(baseline, devset, "Baseline")
+            _, b_metrics, _ = evaluate_module(baseline, eval_set, "Baseline")
             logger.info(f"Baseline Result Match: {b_metrics['result_match_pct']:.2f}%")
 
         logger.info(f"Starting Optimization with {config.optimizer.name}...")
@@ -287,7 +349,7 @@ def run_optimization(config: DSPyOptimizerConfig):
         logger.info(f"Checkpoint saved: {checkpoint_path}")
 
         logger.info("Running Optimized Evaluation...")
-        _, o_metrics, _ = evaluate_module(compiled, devset, "Optimized")
+        _, o_metrics, _ = evaluate_module(compiled, eval_set, "Optimized")
 
         compiled.save(os.path.join(output_dir, "model.json"))
 
@@ -298,6 +360,22 @@ def run_optimization(config: DSPyOptimizerConfig):
             model_name=config.models.student.name,
             dataset_name="Spider Cleaned",
         )
+
+        # Save token statistics
+        import json
+
+        # Collect usage from LM history before saving
+        token_tracker.collect_from_history()
+
+        token_stats = {
+            "tokens": token_tracker.get_token_stats(),
+        }
+
+        token_stats_path = os.path.join(output_dir, "token_stats.json")
+        with open(token_stats_path, "w") as f:
+            json.dump(token_stats, f, indent=2)
+        logger.info(f"Token statistics saved to: {token_stats_path}")
+        logger.info(f"Token usage: {token_stats}")
 
         if b_metrics:
             improvement = o_metrics["result_match_pct"] - b_metrics["result_match_pct"]
