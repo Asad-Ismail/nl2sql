@@ -133,6 +133,62 @@ class BM25Retriever:
         return [self.corpus[i] for i in top_indices[:k]]
 
 
+class SemanticRetriever:
+    """Retrieve similar examples using sentence transformer embeddings"""
+
+    def __init__(self, corpus: List[Dict], model_name: str = "all-MiniLM-L6-v2"):
+        """
+        Initialize semantic retriever with sentence transformer
+
+        Args:
+            corpus: List of examples with 'question' field
+            model_name: Name of sentence transformer model
+        """
+        from sentence_transformers import SentenceTransformer
+
+        self.corpus = corpus
+        self.model = SentenceTransformer(model_name)
+
+        # Pre-compute embeddings for all questions
+        print(f"Computing embeddings for {len(corpus)} examples using {model_name}...")
+        self.embeddings = self.model.encode(
+            [ex["question"] for ex in corpus],
+            show_progress_bar=True,
+            convert_to_numpy=True,
+        )
+        print("✓ Embeddings computed\n")
+
+    def retrieve(self, query: str, k: int = 2, exclude_indices: Optional[List[int]] = None) -> List[Dict]:
+        """
+        Retrieve top-k most similar examples using cosine similarity
+
+        Args:
+            query: Question to find similar examples for
+            k: Number of examples to retrieve
+            exclude_indices: Optional list of indices to exclude
+
+        Returns:
+            List of k most similar examples
+        """
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        # Compute query embedding
+        query_embedding = self.model.encode([query], convert_to_numpy=True)
+
+        # Compute cosine similarity
+        similarities = cosine_similarity(query_embedding, self.embeddings)[0]
+
+        # Get top-k indices
+        top_indices = sorted(range(len(similarities)), key=lambda i: similarities[i], reverse=True)
+
+        # Filter out excluded indices
+        if exclude_indices:
+            top_indices = [i for i in top_indices if i not in exclude_indices]
+
+        # Return top-k examples
+        return [self.corpus[i] for i in top_indices[:k]]
+
+
 class SpiderEvaluator:
     """Evaluate baseline approaches on Spider dataset using unified LLM provider system"""
 
@@ -154,6 +210,12 @@ class SpiderEvaluator:
         self.semantic_validator = None
         self.schemas = load_schemas()
         self.token_stats = TokenStats()
+        # Per-method token stats
+        self.method_token_stats = {
+            "zero_shot": TokenStats(),
+            "few_shot": TokenStats(),
+            "self_correction": TokenStats(),
+        }
 
     def load_dataset_from_hf(self, num_samples: Optional[int] = None) -> List[Dict]:
         """
@@ -246,7 +308,7 @@ class SpiderEvaluator:
         self.semantic_validator = SemanticValidator(self.generate_sql)
 
     def generate_sql(
-        self, user_prompt: str, system_prompt: str = None, max_new_tokens: int = 1024
+        self, user_prompt: str, system_prompt: str = None, max_new_tokens: int = 1024, method: str = None
     ) -> str:
         """Generate SQL using unified LLM provider
 
@@ -254,6 +316,7 @@ class SpiderEvaluator:
             user_prompt: The user prompt (schema, question, etc.)
             system_prompt: Optional system prompt (task instruction)
             max_new_tokens: Maximum tokens to generate
+            method: Method name for per-method token tracking ("zero_shot", "few_shot", "self_correction")
         """
         try:
             # Use LLMFactory provider (rate limiting handled automatically)
@@ -269,9 +332,11 @@ class SpiderEvaluator:
                 stop=["\n\n", "###"],
             )
 
-            # Track token usage
+            # Track token usage (both overall and per-method)
             usage = extract_token_usage(response.usage)
             self.token_stats.add(usage["prompt_tokens"], usage["completion_tokens"])
+            if method and method in self.method_token_stats:
+                self.method_token_stats[method].add(usage["prompt_tokens"], usage["completion_tokens"])
 
             sql = self._extract_sql(response.content)
             return sql.strip()
@@ -294,7 +359,7 @@ class SpiderEvaluator:
         user_prompt = BASELINE_USER_PROMPT_TEMPLATE.format(schema=schema, question=question)
 
         start_time = time.time()
-        sql = self.generate_sql(user_prompt, system_prompt=BASELINE_SYSTEM_PROMPT, max_new_tokens=250)
+        sql = self.generate_sql(user_prompt, system_prompt=BASELINE_SYSTEM_PROMPT, max_new_tokens=250, method="zero_shot")
         inference_time = time.time() - start_time
 
         # Execute generated SQL
@@ -348,7 +413,7 @@ class SpiderEvaluator:
         user_prompt += "SQL Query:\n"
 
         start_time = time.time()
-        sql = self.generate_sql(user_prompt, system_prompt=system_prompt, max_new_tokens=250)
+        sql = self.generate_sql(user_prompt, system_prompt=system_prompt, max_new_tokens=250, method="few_shot")
         inference_time = time.time() - start_time
 
         # Execute generated SQL
@@ -408,7 +473,7 @@ class SpiderEvaluator:
 
         for attempt_num in range(max_attempts):
             # Generate SQL
-            sql = self.generate_sql(user_prompt, system_prompt=BASELINE_SYSTEM_PROMPT, max_new_tokens=1024)
+            sql = self.generate_sql(user_prompt, system_prompt=BASELINE_SYSTEM_PROMPT, max_new_tokens=1024, method="self_correction")
             ## handle empty sql
             if not sql or not sql.strip():
                 attempt_record = {
@@ -421,9 +486,9 @@ class SpiderEvaluator:
                 attempts.append(attempt_record)
 
                 # Add feedback for next attempt
-                prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
-                prompt += "\n-- Error: Generated empty SQL"
-                prompt += "\n-- Please generate a valid SQL query:\n-- SQL:\n"
+                user_prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
+                user_prompt += "\n-- Error: Generated empty SQL"
+                user_prompt += "\n-- Please generate a valid SQL query:\n-- SQL:\n"
                 continue
 
             # Try to execute
@@ -443,10 +508,10 @@ class SpiderEvaluator:
                 attempts.append(attempt_record)
 
                 # Add execution error feedback for next attempt
-                prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
-                prompt += f"\n-- SQL: {sql}"
-                prompt += f"\n-- Execution error: {error}"
-                prompt += "\n-- Fix the error and try again:\n"
+                user_prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
+                user_prompt += f"\n-- SQL: {sql}"
+                user_prompt += f"\n-- Execution error: {error}"
+                user_prompt += "\n-- Fix the error and try again:\n"
                 continue
 
             # Execution succeeded - now do LLM semantic validation
@@ -471,11 +536,11 @@ class SpiderEvaluator:
                 break
 
             # LLM says it's not correct - add feedback for next attempt
-            prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
-            prompt += f"\n-- SQL: {sql}"
-            prompt += f"\n-- LLM Feedback: {llm_validation[:200]}..."
-            prompt += "\n\n-- Generate improved SQL:"
-            prompt += "\n-- SQL:"  # Clear signal to generate here
+            user_prompt += f"\n\n-- Previous attempt {attempt_num + 1}:"
+            user_prompt += f"\n-- SQL: {sql}"
+            user_prompt += f"\n-- LLM Feedback: {llm_validation[:200]}..."
+            user_prompt += "\n\n-- Generate improved SQL:"
+            user_prompt += "\n-- SQL:"  # Clear signal to generate here
 
         # Use best attempt for final results (fallback to last if no valid attempts)
         final_attempt = best_attempt if best_attempt else attempts[-1]
@@ -516,20 +581,32 @@ class SpiderEvaluator:
     # ================================================================
 
     def evaluate(
-        self, output_dir: str = "results/baseline", num_samples: int = None, print_every: int = 10
+        self,
+        output_dir: str = "results/baseline",
+        num_samples: int = None,
+        print_every: int = 10,
+        methods: List[str] = None,
+        retriever_type: str = "bm25",
     ):
         """
-        Evaluate all baseline methods on Spider dataset from HuggingFace
+        Evaluate baseline methods on Spider dataset from HuggingFace
 
         Args:
             output_dir: Where to save results
             num_samples: Number of samples to evaluate (None = all)
             print_every: Print intermediate results every N examples
+            methods: List of methods to run (None = all three)
+            retriever_type: Type of retriever for few-shot ('bm25' or 'semantic')
         """
+
+        # Default to all methods if not specified
+        if methods is None:
+            methods = ["zero_shot", "few_shot", "self_correction"]
 
         print(f"\n{'='*60}")
         print("Baseline Evaluation on Spider Dataset (vLLM)")
         print(f"{'='*60}\n")
+        print(f"Methods to run: {', '.join(methods)}\n")
 
         # Load data from HuggingFace
         data = self.load_dataset_from_hf(num_samples=num_samples)
@@ -537,10 +614,16 @@ class SpiderEvaluator:
         print(f"Evaluating on {len(data)} examples\n")
         print(f"Printing intermediate results every {print_every} examples\n")
 
-        # Initialize BM25 retriever for few-shot learning
-        print("Initializing BM25 retriever for few-shot example selection...")
-        bm25_retriever = BM25Retriever(data)
-        print("✓ BM25 retriever ready\n")
+        # Initialize retriever only if few-shot is enabled
+        if "few_shot" in methods:
+            print(f"Initializing {retriever_type.upper()} retriever for few-shot example selection...")
+            if retriever_type == "semantic":
+                retriever = SemanticRetriever(data)
+            else:
+                retriever = BM25Retriever(data)
+            print(f"✓ {retriever_type.upper()} retriever ready\n")
+        else:
+            retriever = None
 
         # Load model
         self.load_model()
@@ -565,7 +648,7 @@ class SpiderEvaluator:
         }
 
         # Evaluate each method
-        for method_name in ["zero_shot", "few_shot", "self_correction"]:
+        for method_name in methods:
             print(f"\n{'='*60}")
             print(f"Method: {method_name.upper().replace('_', ' ')}")
             print(f"{'='*60}\n")
@@ -589,8 +672,8 @@ class SpiderEvaluator:
                     if method_name == "zero_shot":
                         result = self.zero_shot(question, schema, db_path, gold_sql)
                     elif method_name == "few_shot":
-                        # Use BM25 to retrieve most similar examples
-                        examples = bm25_retriever.retrieve(question, k=2, exclude_indices=[i])
+                        # Use selected retriever to retrieve most similar examples
+                        examples = retriever.retrieve(question, k=2, exclude_indices=[i])
                         result = self.few_shot(question, schema, db_path, examples, gold_sql)
                     else:  # self_correction with semantic feedback
                         result = self.self_correction(question, schema, db_path, gold_sql)
@@ -657,8 +740,11 @@ class SpiderEvaluator:
                         }
                     )
 
-        # Add token statistics to results
+        # Add token statistics to results (both overall and per-method)
         results["token_stats"] = self.token_stats.to_dict()
+        results["per_method_token_stats"] = {
+            method: stats.to_dict() for method, stats in self.method_token_stats.items()
+        }
 
         # Save results and generate report
         self._save_results(results, output_dir)
@@ -688,6 +774,11 @@ class SpiderEvaluator:
             metrics = calculate_metrics(data)
             all_metrics[method] = metrics
 
+            # Add token stats to metrics if available
+            if "per_method_token_stats" in results and method in results["per_method_token_stats"]:
+                metrics["total_tokens"] = results["per_method_token_stats"][method]["total_tokens"]
+                metrics["total_calls"] = results["per_method_token_stats"][method]["total_calls"]
+
             # Print to console
             print(f"{method.upper()}")
             print(
@@ -710,14 +801,36 @@ class SpiderEvaluator:
             print(f"  Total Tokens:            {ts['total_tokens']:,}")
             print(f"{'='*60}\n")
 
-        # Build summary table
-        summary_table = "| Method | Valid SQL % | Results Match % |\n"
-        summary_table += "|--------|-------------|-----------------|\n"
+        # Build summary table with token stats
+        summary_table = "| Method | Valid SQL % | Results Match % | Total Tokens | LLM Calls |\n"
+        summary_table += "|--------|-------------|-----------------|--------------|----------|\n"
 
         for method, metrics in all_metrics.items():
             summary_table += f"| {method.replace('_', ' ').title()} | "
             summary_table += f"{metrics['valid_sql_pct']:.1f}% | "
-            summary_table += f"{metrics['result_match_pct']:.1f}% |\n"
+            summary_table += f"{metrics['result_match_pct']:.1f}% | "
+
+            # Add token stats
+            if "per_method_token_stats" in results and method in results["per_method_token_stats"]:
+                ts = results["per_method_token_stats"][method]
+                summary_table += f"{ts['total_tokens']:,} | "
+                summary_table += f"{ts['total_calls']:,} |\n"
+            else:
+                summary_table += "| N/A | N/A |\n"
+
+        # Print per-method token statistics to console
+        if "per_method_token_stats" in results:
+            print(f"{'='*60}")
+            print("PER-METHOD TOKEN STATISTICS")
+            print(f"{'='*60}")
+            for method, ts in results["per_method_token_stats"].items():
+                print(f"{method.upper().replace('_', ' ')}:")
+                print(f"  LLM Calls:        {ts['total_calls']:,}")
+                print(f"  Total Tokens:      {ts['total_tokens']:,}")
+                print(f"  Prompt Tokens:     {ts['total_prompt_tokens']:,}")
+                print(f"  Completion Tokens: {ts['total_completion_tokens']:,}")
+                print()
+            print(f"{'='*60}\n")
 
         # Build complexity breakdown for each method
         complexity_section = ""
@@ -781,8 +894,32 @@ def main():
         default=10,
         help="Print intermediate results every N examples (default: 10)",
     )
+    parser.add_argument(
+        "--methods",
+        type=str,
+        nargs="+",
+        default=["zero_shot", "few_shot", "self_correction"],
+        choices=["zero_shot", "few_shot", "self_correction", "all"],
+        help="Which baseline methods to run (default: all)",
+    )
+    parser.add_argument(
+        "--retriever",
+        type=str,
+        default="bm25",
+        choices=["bm25", "semantic"],
+        help="Retriever type for few-shot learning (default: bm25)",
+    )
 
     args = parser.parse_args()
+
+    # Handle "all" shortcut for methods
+    if "all" in args.methods:
+        methods_to_run = ["zero_shot", "few_shot", "self_correction"]
+    else:
+        methods_to_run = args.methods
+
+    print(f"\nMethods to run: {', '.join(methods_to_run)}")
+    print(f"Retriever type: {args.retriever.upper()}")
 
     # Generate output directory based on model name if not specified
     if args.output is None:
@@ -799,7 +936,11 @@ def main():
     # Run evaluation
     evaluator = SpiderEvaluator(model_name=args.model, config_path=args.config_path)
     evaluator.evaluate(
-        output_dir=args.output, num_samples=args.num_samples, print_every=args.print_every
+        output_dir=args.output,
+        num_samples=args.num_samples,
+        print_every=args.print_every,
+        methods=methods_to_run,
+        retriever_type=args.retriever,
     )
 
     print("\n✓ Baseline evaluation complete!")
