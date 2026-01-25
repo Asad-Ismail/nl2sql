@@ -86,9 +86,10 @@ mypy src/
 ## Critical Conventions
 
 ### Environment Setup (CRITICAL)
-- **Always use `uv`** for package installation and virtual environment creation
-- **Always activate venv** before running tests, evaluation, or any commands: `source .venv/bin/activate`
-- Standard workflow: `uv sync && source .venv/bin/activate`
+- **Always use `uv` as the package manager** - Never use pip directly
+- **Virtual environment must exist in current repo** - Create with `uv sync` if not present
+- **Always activate venv before running any script or vllm**: `source .venv/bin/activate`
+- Standard workflow: `uv sync && source .venv/bin/activate && python src/nl2sql/...`
 
 ### SQL Dialect Consistency
 - **Standard SQL only** (SQLite/PostgreSQL/MySQL) - DuckDB excluded for PRAGMA statements
@@ -99,6 +100,8 @@ mypy src/
 - PEP 257 docstrings with Parameters/Returns sections
 - Line length: 100 chars (black/ruff configured in pyproject.toml)
 - No emojis in code or responses
+- **Write minimal Python code with no repetition** - Any code that will be used more than once must be placed in `src/nl2sql/utils/util.py`
+- Keep code simple and straightforward - avoid over-engineering
 
 ### Dataset Field Handling
 - Field names vary across datasets: `query` vs `sql`, `sql_prompt` vs `question`
