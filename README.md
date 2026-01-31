@@ -30,8 +30,12 @@ Performance on Spider dev set (1,034 examples):
 
 | Method | Valid SQL % | Execution Match % | Total Tokens | LLM Calls | Notes |
 |--------|-------------|-------------------|--------------|-----------|-------|
-| **Baseline Methods (BM25 Retrieval)** |
+| **Baseline Methods (Random Examples)** |
 | Zero-Shot | 84.2% | 56.7% | 285K | 1,034 | Fast baseline |
+| Few-Shot (random) | 83.8% | 56.7% | N/A | N/A | Random examples degraded performance |
+| Self-Correction | 87.8% | 58.7% | N/A | N/A | +2% gain with random examples |
+| **Baseline Methods (BM25 Retrieval)** |
+| Zero-Shot | 84.2% | 56.7% | 285K | 1,034 | Same performance |
 | Few-Shot (BM25) | **91.6%** | **75.7%** | 447K | 1,034 | **+19% gain with semantic retrieval** |
 | Self-Correction | 89.8% | 59.6% | 1.25M | 3,081 | +3% gain, 3x more tokens |
 | **Optimized Methods** |
@@ -49,7 +53,8 @@ Performance on Spider dev set (1,034 examples):
 *DSPy optimization time amortized across queries after initial training
 
 **Key Findings:**
-- **BM25 Few-Shot wins**: Semantic example retrieval delivers +19% gain (75.7% vs 56.7%)
+- **Random few-shot fails**: Random examples provide no benefit (56.7% vs 56.7%)
+- **BM25 Few-Shot wins**: Semantic retrieval delivers +19% gain (75.7% vs 56.7%)
 - **Self-correction marginal**: Only +3% gain for 4.4x more tokens (1.25M vs 285K)
 - **Fine-tuning competitive**: LoRA matches BM25 few-shot (73.0% vs 75.7%)
 - **Token efficiency**: Few-shot adds only 162K tokens for +19% accuracy gain
