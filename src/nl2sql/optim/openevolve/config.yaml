@@ -1,0 +1,25 @@
+llm:
+  api_base: "https://integrate.api.nvidia.com/v1"
+  api_key: ${NVIDIA_API_KEY}
+  models:
+    - name: "meta/llama-3.1-70b-instruct"
+      weight: 1.0
+  temperature: 0.7
+  max_tokens: 3072
+
+evaluator:
+  use_llm_feedback: true
+  llm_feedback_weight: 0.25
+  timeout: 1800
+  cascade_evaluation: false
+
+diff_based_evolution: false
+allow_full_rewrites: true
+
+prompt:
+  # Relative path from where you run the command
+  template_dir: src/nl2sql/optim/openevolve/templates
+  
+  # Explicit file names matching your 'ls' output
+  system_template: evaluator_system_message.txt
+  user_template: full_rewrite_user.txt

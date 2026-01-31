@@ -1,0 +1,25 @@
+# TextGrad Optimizer Configuration
+
+experiment:
+  name: textgrad-nl2sql
+  output_dir: results/textgrad
+  seed: 42
+
+data:
+  dataset_name: AsadIsmail/nl2sql-deduplicated
+  train_file: spider_clean.jsonl
+  dev_file: spider_dev_clean.jsonl
+  train_size: 400
+  val_size: 500
+  shuffle_seed: 42
+
+models:
+  student_model: codellama_7b
+  teacher_model: llama_70b_nvidia
+
+training:
+  epochs: 1
+  batch_size: 3
+
+evaluation:
+  fitness_samples: 40

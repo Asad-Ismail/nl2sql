@@ -1,0 +1,7 @@
+optimizer:
+  name: "KNNFewShot"
+  params:
+    k: 3
+    embedder:
+      type: "sentence_transformer"
+      model: "all-MiniLM-L6-v2"

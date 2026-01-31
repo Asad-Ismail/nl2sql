@@ -1,265 +1,487 @@
 """
 DSPy Optimizer for NL2SQL
-Enhanced version with CLI support for different models, optimizers, and teacher settings.
+Configurable version with YAML config support.
 """
 
-import dspy
-import os
-import logging
 import argparse
-from pathlib import Path
+import logging
+import os
 from collections import defaultdict
+
+import dspy
 from datasets import load_dataset
-from tqdm import tqdm
-from dotenv import load_dotenv, find_dotenv
+from dotenv import find_dotenv, load_dotenv
 from dspy.utils.callback import BaseCallback
-# utility imports
+from tqdm import tqdm
+
 from nl2sql.utils.util import (
-    load_schemas, execute_sql, compare_results, extract_sql_from_text,
-    get_db_path, categorize_sql_complexity, calculate_metrics,
-    save_evaluation_results, save_evaluation_summary, generate_markdown_report
+    calculate_metrics,
+    categorize_sql_complexity,
+    compare_results,
+    execute_sql,
+    extract_sql_from_text,
+    generate_markdown_report,
+    generate_optimizer_markdown_report,
+    get_db_path,
+    load_schemas,
+    print_token_statistics,
+    TokenStats,
 )
 
-# Configuration and Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from .config import DSPyOptimizerConfig, cli_args_to_config_overrides, load_config
+from .optimizers import OptimizerRegistry
+
 logger = logging.getLogger(__name__)
 SCHEMAS = load_schemas()
 
+
 class LLMLogger(BaseCallback):
+    """Callback to log LLM calls for debugging."""
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+
     def on_lm_start(self, call_id, instance, inputs):
-        # Identify which model is being called
-        model_name = getattr(instance, 'model', 'Unknown Model')
-        prompt = inputs.get('prompt') or inputs.get('messages')
-        
+        if not self.enabled:
+            return
+        model_name = getattr(instance, "model", "Unknown Model")
+        prompt = inputs.get("prompt") or inputs.get("messages")
         print(f"\n{'='*20} [LM CALL START] {'='*20}")
         print(f"MODEL:   {model_name}")
         print(f"CALL ID: {call_id}")
-        # Optionally truncate the prompt if it's too long for the console
-        print(f"PROMPT:  {str(prompt)}") 
+        print(f"PROMPT:  {str(prompt)}")
 
     def on_lm_end(self, call_id, outputs, exception, **kwargs):
-        # We use **kwargs here to catch 'instance' and any other metadata
-        # Access the instance from kwargs to identify the model
-        instance = kwargs.get('instance')
-        model_name = getattr(instance, 'model', 'Unknown Model')
-        
+        if not self.enabled:
+            return
+        instance = kwargs.get("instance")
+        model_name = getattr(instance, "model", "Unknown Model")
         print(f"\n{'-'*20} [LM CALL END] {'-'*20}")
         print(f"MODEL:   {model_name}")
         print(f"CALL ID: {call_id}")
-        
         if exception:
             print(f"ERROR:   {exception}")
         else:
-            # outputs is usually a list of completions
             print(f"OUTPUT:  {outputs}")
         print(f"{'='*57}\n")
 
 
-logger_cb = LLMLogger()
-dspy.configure(callbacks=[logger_cb])
+class TokenUsageTracker:
+    """Track token usage from DSPy LM history."""
 
-# ==============================================================================
-# Model & Module Definitions
-# ==============================================================================
+    def __init__(self):
+        self.stats = TokenStats()
+        self.tracked_lms = []
+
+    def add_usage(self, model: str, usage: dict) -> None:
+        """Called by DSPy when an LLM call completes (only for non-cached calls)."""
+        if usage:
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            self.stats.add(prompt_tokens, completion_tokens)
+
+    def track_lm(self, lm):
+        """Register an LM to track its history later."""
+        self.tracked_lms.append(lm)
+
+    def collect_from_history(self):
+        """Collect usage from LM history after completion."""
+        for lm in self.tracked_lms:
+            if hasattr(lm, 'history'):
+                for entry in lm.history:
+                    usage = entry.get('usage', {})
+                    if usage and isinstance(usage, dict):
+                        prompt_tokens = usage.get('prompt_tokens', 0)
+                        completion_tokens = usage.get('completion_tokens', 0)
+                        if prompt_tokens or completion_tokens:
+                            self.stats.add(prompt_tokens, completion_tokens)
+
+    def get_token_stats(self) -> dict:
+        """Return token statistics."""
+        return self.stats.to_dict()
+
 
 class TextToSQL(dspy.Signature):
     """Convert natural language to SQL given the schema. Return only the SQL query."""
+
     db_schema = dspy.InputField(desc="The Schema of the database tables")
     question = dspy.InputField(desc="The user's question to answer")
     sql = dspy.OutputField(desc="The executable SQL query string")
 
+
 class SQLModule(dspy.Module):
-    def __init__(self, use_cot=True):
+    """DSPy module for Text-to-SQL generation."""
+
+    def __init__(self, use_cot: bool = True):
         super().__init__()
         self.prog = dspy.ChainOfThought(TextToSQL) if use_cot else dspy.Predict(TextToSQL)
 
     def forward(self, db_schema, question):
         return self.prog(db_schema=db_schema, question=question)
 
-# ==============================================================================
-# Metric & Evaluation
-# ==============================================================================
 
-def sql_metric(example, prediction, trace=None):
-    """DSPy metric for optimization."""
-    if not hasattr(prediction, 'sql') or not prediction.sql:
+def sql_metric(example, prediction, trace=None) -> float:
+    """DSPy metric for optimization based on execution accuracy."""
+    if not hasattr(prediction, "sql") or not prediction.sql:
         return 0.0
-    
+
     pred_sql = extract_sql_from_text(prediction.sql)
     db_path = get_db_path(example.db_id)
-    
+
     gold_success, _, gold_results = execute_sql(example.sql, db_path)
     pred_success, _, pred_results = execute_sql(pred_sql, db_path)
-    
+
     if not gold_success or not pred_success:
         return 0.0
-    
+
     match, _ = compare_results(pred_results, gold_results)
+
+    if not pred_success:
+        print(f"FAILED EXECUTION. DB: {db_path}")
+        print(f"Query: {pred_sql}")
+    elif not match:
+        print(f"MISMATCH. Gold: {gold_results} | Pred: {pred_results}")
+    else:
+        print("SUCCESS! Found a valid demo.")
+        
     return 1.0 if match else 0.0
+
 
 def evaluate_module(module, devset, desc="Evaluating"):
     """Comprehensive evaluation with complexity tracking."""
     results = []
-    complexity_metrics = defaultdict(lambda: {'total': 0, 'valid': 0, 'matched': 0})
-    
+    complexity_metrics = defaultdict(lambda: {"total": 0, "valid": 0, "matched": 0})
+
     for example in tqdm(devset, desc=desc):
         prediction = module(db_schema=example.db_schema, question=example.question)
-        pred_sql = extract_sql_from_text(prediction.sql) if hasattr(prediction, 'sql') and prediction.sql else ""
-        
+        pred_sql = (
+            extract_sql_from_text(prediction.sql)
+            if hasattr(prediction, "sql") and prediction.sql
+            else ""
+        )
+
         db_path = get_db_path(example.db_id)
         gold_success, _, gold_results = execute_sql(example.sql, db_path)
         pred_success, _, pred_results = execute_sql(pred_sql, db_path)
-        
+
         results_match = False
         if gold_success and pred_success:
             results_match, _ = compare_results(pred_results, gold_results)
-        
+
         categories = categorize_sql_complexity(example.sql)
-        
-        results.append({
-            "question": example.question,
-            "db_id": example.db_id,
-            "generated_sql": pred_sql,
-            "gold_sql": example.sql,
-            "is_valid": pred_success,
-            "results_match": results_match,
-            "complexity": categories
-        })
-        
+
+        results.append(
+            {
+                "question": example.question,
+                "db_id": example.db_id,
+                "generated_sql": pred_sql,
+                "gold_sql": example.sql,
+                "is_valid": pred_success,
+                "results_match": results_match,
+                "complexity": categories,
+            }
+        )
+
         for cat in categories:
-            complexity_metrics[cat]['total'] += 1
-            if pred_success: complexity_metrics[cat]['valid'] += 1
-            if results_match: complexity_metrics[cat]['matched'] += 1
-            
+            complexity_metrics[cat]["total"] += 1
+            if pred_success:
+                complexity_metrics[cat]["valid"] += 1
+            if results_match:
+                complexity_metrics[cat]["matched"] += 1
+
     return results, calculate_metrics(results), complexity_metrics
 
-# ==============================================================================
-# Optimization Runner
-# ==============================================================================
 
-def get_optimizer(name, **kwargs):
-    """Factory for DSPy optimizers."""
-    if name == "BootstrapFewShot":
-        return dspy.teleprompt.BootstrapFewShot(metric=sql_metric, **kwargs)
-    elif name == "BootstrapFewShotWithRandomSearch":
-        return dspy.teleprompt.BootstrapFewShotWithRandomSearch(metric=sql_metric, **kwargs)
-    elif name == "MIPRO":
-        return dspy.teleprompt.MIPROv2(metric=sql_metric, **kwargs)
-    else:
-        raise ValueError(f"Unknown optimizer: {name}")
+def setup_logging(config: DSPyOptimizerConfig):
+    """Configure logging based on config."""
+    logging.basicConfig(
+        level=getattr(logging, config.logging.level),
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+    llm_logger = LLMLogger(enabled=config.logging.enable_llm_logger)
+    token_tracker = TokenUsageTracker()
 
-def setup_lms(args):
-    """Initialize Student and Teacher LMs based on CLI args."""
-    # Student LM
+    # Enable DSPy's built-in usage tracking
+    # Note: usage_tracker is accessed via dspy.settings.usage_tracker, not via configure()
+    dspy.settings.usage_tracker = token_tracker
+    dspy.configure(callbacks=[llm_logger])
+
+    # Verify it's set
+    print(f"🔧 Token tracker set: {dspy.settings.usage_tracker is not None}")
+    print(f"🔧 Token tracker type: {type(dspy.settings.usage_tracker)}")
+
+    return token_tracker
+
+
+def setup_lms(config: DSPyOptimizerConfig, token_tracker=None):
+    """Initialize Student and Teacher LMs from config."""
+    student_cfg = config.models.student
+
+    print(f"Config osf sttudent is {student_cfg}")
+    # Use DSPy's built-in LM with OpenAI-compatible provider
+    # Note: cache disabled to enable accurate token tracking for comparison with other methods
     student_lm = dspy.LM(
-        model=args.student_model,
-        api_base=args.api_base,
-        api_key=args.api_key,
-        max_tokens=args.max_tokens,
-        temperature=0.0
+        model=student_cfg.name,
+        model_type="chat",
+        api_base=student_cfg.api_base,
+        api_key=student_cfg.api_key,
+        max_tokens=student_cfg.max_tokens,
+        temperature=student_cfg.temperature,
+        cache=False,  # Required for token usage tracking
     )
     dspy.configure(lm=student_lm)
-    
+
     teacher_lm = None
-    if args.use_teacher:
+    if config.models.teacher.enabled:
         load_dotenv(find_dotenv())
-        teacher_key = os.getenv("NVIDIA_API_KEY") or args.api_key
+        teacher_cfg = config.models.teacher
         teacher_lm = dspy.LM(
-            model=args.teacher_model,
-            api_key=teacher_key,
-            api_base="https://integrate.api.nvidia.com/v1",
-            temperature=0.7
+            model=teacher_cfg.name,
+            model_type="chat",
+            api_base=teacher_cfg.api_base,
+            api_key=teacher_cfg.api_key or os.getenv("NVIDIA_API_KEY"),
+            temperature=teacher_cfg.temperature,
+            cache=False,  # Required for token usage tracking
         )
+
     return student_lm, teacher_lm
 
-# ==============================================================================
-# Data Loading
-# ==============================================================================
 
-def load_and_prep_data(train_size=3000, val_size=2000):
-    full_data = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_clean.jsonl", split="train")
-    dev_raw = load_dataset("AsadIsmail/nl2sql-deduplicated", data_files="spider_dev_clean.jsonl", split="train")
-    
-    shuffled = full_data.shuffle(seed=42)
-    
+def load_and_prep_data(config: DSPyOptimizerConfig):
+    """Load and prepare data from config."""
+    data_cfg = config.data
+
+    full_data = load_dataset(
+        data_cfg.dataset.name,
+        data_files=data_cfg.dataset.train_file,
+        split="train",
+    )
+    dev_raw = load_dataset(
+        data_cfg.dataset.name,
+        data_files=data_cfg.dataset.dev_file,
+        split="train",
+    )
+
+    if data_cfg.preprocessing.shuffle:
+        shuffled = full_data.shuffle(seed=data_cfg.preprocessing.seed)
+    else:
+        shuffled = full_data
+
     def to_dspy(subset):
-        return [dspy.Example(
-            db_schema=SCHEMAS.get(i['db_id'], f"Database: {i['db_id']}"),
-            question=i['question'], sql=i['sql'], db_id=i['db_id']
-        ).with_inputs('db_schema', 'question') for i in subset]
+        return [
+            dspy.Example(
+                db_schema=SCHEMAS.get(i["db_id"], f"Database: {i['db_id']}"),
+                question=i["question"],
+                sql=i["sql"],
+                db_id=i["db_id"],
+            ).with_inputs("db_schema", "question")
+            for i in subset
+        ]
+
+    train_size = data_cfg.splits.train_size
+    val_size = data_cfg.splits.val_size
 
     trainset = to_dspy(shuffled.select(range(0, train_size)))
     valset = to_dspy(shuffled.select(range(train_size, train_size + val_size)))
     devset = to_dspy(dev_raw)
-    
+
     return trainset, valset, devset
 
-# ==============================================================================
-# Main Execution
-# ==============================================================================
+
+def run_optimization(config: DSPyOptimizerConfig):
+    """
+    Run the full optimization pipeline with given config.
+
+    Parameters
+    ----------
+    config : DSPyOptimizerConfig
+        Validated configuration
+
+    Returns
+    -------
+    tuple
+        (compiled_module, optimized_metrics)
+    """
+    token_tracker = setup_logging(config)
+    output_dir = config.experiment.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    compiled = None
+    try:
+        student_lm, teacher_lm = setup_lms(config, token_tracker=token_tracker)
+
+        # Register LMs for tracking
+        token_tracker.track_lm(student_lm)
+        if teacher_lm:
+            token_tracker.track_lm(teacher_lm)
+
+        trainset, valset, devset = load_and_prep_data(config)
+
+        # For quick testing, limit evaluation size when train_size is small
+        eval_set = devset[:10] if config.data.splits.train_size <= 5 else devset
+
+        b_metrics = None
+        if config.evaluation.run_baseline:
+            logger.info("Running Baseline Evaluation...")
+            baseline = SQLModule(use_cot=config.module.use_cot)
+            _, b_metrics, _ = evaluate_module(baseline, eval_set, "Baseline")
+            logger.info(f"Baseline Result Match: {b_metrics['result_match_pct']:.2f}%")
+
+        logger.info(f"Starting Optimization with {config.optimizer.name}...")
+
+        optimizer_cls = OptimizerRegistry.get(config.optimizer.name)
+        optimizer_wrapper = optimizer_cls(metric=sql_metric, config=config.optimizer)
+
+        teacher_module = None
+        if config.models.teacher.enabled and teacher_lm:
+            teacher_module = SQLModule(use_cot=True)
+            for p in teacher_module.predictors():
+                p.lm = teacher_lm
+
+        compiled = optimizer_wrapper.compile(
+            student=SQLModule(use_cot=config.module.use_cot),
+            teacher=teacher_module,
+            trainset=trainset,
+            valset=valset,
+        )
+
+        # Save checkpoint after optimization
+        checkpoint_path = os.path.join(output_dir, "checkpoint.json")
+        compiled.save(checkpoint_path)
+        logger.info(f"Checkpoint saved: {checkpoint_path}")
+
+        logger.info("Running Optimized Evaluation...")
+        _, o_metrics, _ = evaluate_module(compiled, eval_set, "Optimized")
+
+        compiled.save(os.path.join(output_dir, "model.json"))
+
+        generate_markdown_report(
+            metrics=o_metrics,
+            output_dir=output_dir,
+            title=f"Optimization: {config.optimizer.name}",
+            model_name=config.models.student.name,
+            dataset_name="Spider Cleaned",
+        )
+
+        # Save token statistics
+        import json
+
+        # Collect usage from LM history before saving
+        token_tracker.collect_from_history()
+
+        token_stats = {
+            "tokens": token_tracker.get_token_stats(),
+        }
+
+        token_stats_path = os.path.join(output_dir, "token_stats.json")
+        with open(token_stats_path, "w") as f:
+            json.dump(token_stats, f, indent=2)
+        logger.info(f"Token statistics saved to: {token_stats_path}")
+        logger.info(f"Token usage: {token_stats}")
+
+        # Print console output and generate detailed markdown report with token breakdown
+        student_tokens = token_stats.get("tokens", {})
+
+        # Check if teacher model was used by examining teacher_lm
+        teacher_tokens = None
+        if teacher_lm and hasattr(teacher_lm, 'history'):
+            teacher_stats = TokenStats()
+            for entry in teacher_lm.history:
+                usage = entry.kwargs.get('usage') if hasattr(entry, 'kwargs') else {}
+                if isinstance(usage, dict):
+                    prompt_tokens = usage.get('prompt_tokens', 0)
+                    completion_tokens = usage.get('completion_tokens', 0)
+                    if prompt_tokens or completion_tokens:
+                        teacher_stats.add(prompt_tokens, completion_tokens)
+            if teacher_stats.total_calls > 0:
+                teacher_tokens = teacher_stats.to_dict()
+
+        # Print console output
+        print(f"\n{'='*60}")
+        print("OPTIMIZATION RESULTS")
+        print(f"{'='*60}\n")
+
+        print(f"{config.optimizer.name.upper()}")
+        print(f"  Valid SQL: {o_metrics['valid_sql_count']}/{o_metrics['total_examples']} ({o_metrics['valid_sql_pct']:.1f}%)")
+        print(f"  Results Match Gold: {o_metrics['result_match_count']}/{o_metrics['total_examples']} ({o_metrics['result_match_pct']:.1f}%)")
+        print()
+
+        # Print token statistics
+        print_token_statistics(
+            student_tokens=student_tokens,
+            teacher_tokens=teacher_tokens,
+            title="TOKEN STATISTICS"
+        )
+
+        # Generate detailed markdown report
+        generate_optimizer_markdown_report(
+            metrics=o_metrics,
+            student_tokens=student_tokens,
+            teacher_tokens=teacher_tokens,
+            output_dir=output_dir,
+            title=f"Optimization: {config.optimizer.name}",
+            model_name=config.models.student.name,
+            dataset_name="Spider Cleaned",
+            optimizer_name=config.optimizer.name,
+        )
+
+        logger.info(f"Detailed report saved to: {output_dir}/evaluation_report.md")
+
+        if b_metrics:
+            improvement = o_metrics["result_match_pct"] - b_metrics["result_match_pct"]
+            logger.info(f"Optimization Complete. Improvement: {improvement:+.2f}%")
+        else:
+            logger.info(
+                f"Optimization Complete. Result Match: {o_metrics['result_match_pct']:.2f}%"
+            )
+
+        return compiled, o_metrics
+
+    except Exception as e:
+        logger.error(f"Optimization failed: {e}")
+        # Save partial results if available
+        if compiled is not None:
+            error_path = os.path.join(output_dir, "failed_model.json")
+            compiled.save(error_path)
+            logger.info(f"Partial results saved to: {error_path}")
+        raise
+
 
 def main():
-    parser = argparse.ArgumentParser(description="DSPy NL2SQL Optimizer")
-    parser.add_argument("--student_model", type=str, default="openai/TheBloke/CodeLlama-7B-Instruct-AWQ")
-    parser.add_argument("--api_base", type=str, default="http://localhost:8000/v1")
-    parser.add_argument("--api_key", type=str, default="dummy")
-    parser.add_argument("--max_tokens", type=int, default=512)
-    parser.add_argument("--optimizer", type=str, default="BootstrapFewShotWithRandomSearch")
-    parser.add_argument("--use_cot", action="store_true", default=True)
-    parser.add_argument("--use_teacher", action="store_true")
-    parser.add_argument("--teacher_model", type=str, default="moonshotai/kimi-k2-thinking")
-    parser.add_argument("--output_dir", type=str, default="results/dspy_optimized_run")
+    parser = argparse.ArgumentParser(description="DSPy NL2SQL Optimizer (Configurable)")
+
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
+
+    parser.add_argument("--student_model", type=str, default=None)
+    parser.add_argument("--api_base", type=str, default=None)
+    parser.add_argument("--api_key", type=str, default=None)
+    parser.add_argument("--max_tokens", type=int, default=None)
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default=None,
+        choices=OptimizerRegistry.list_available(),
+    )
+    parser.add_argument("--use_cot", action="store_true", default=None)
+    parser.add_argument("--no_cot", action="store_true", help="Disable chain-of-thought")
+    parser.add_argument("--use_teacher", action="store_true", default=None)
+    parser.add_argument("--teacher_model", type=str, default=None)
+    parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--train_size", type=int, default=None)
+    parser.add_argument("--val_size", type=int, default=None)
+
     args = parser.parse_args()
 
-    #  Setup
-    student_lm, teacher_lm = setup_lms(args)
-    trainset, valset, devset = load_and_prep_data()
-    
-    #  Baseline
-    logger.info("Running Baseline Evaluation...")
-    baseline = SQLModule(use_cot=args.use_cot)
-    b_res, b_metrics, b_complexity = evaluate_module(baseline, devset, "Baseline")
+    if args.no_cot:
+        args.use_cot = False
 
-    #  Optimization
-    logger.info(f"Starting Optimization with {args.optimizer}...")
-    optimizer = get_optimizer(
-        args.optimizer, 
-        max_bootstrapped_demos=2, 
-        max_labeled_demos=2, 
-        num_candidate_programs=5
-    )
-    
-    teacher_module = None
-    if args.use_teacher and teacher_lm:
-        teacher_module = SQLModule(use_cot=True)
-        for p in teacher_module.predictors():
-            p.lm = teacher_lm
+    cli_overrides = cli_args_to_config_overrides(args)
+    config = load_config(config_path=args.config, cli_overrides=cli_overrides)
 
-    compiled = optimizer.compile(
-        student=SQLModule(use_cot=args.use_cot),
-        teacher=teacher_module,
-        trainset=trainset,
-        valset=valset
-    )
+    print(f"Config is {config}")
 
-    # Final Evaluation
-    logger.info("Running Optimized Evaluation...")
-    o_res, o_metrics, o_complexity = evaluate_module(compiled, devset, "Optimized")
+    run_optimization(config)
 
-    #  Reporting & Saving
-    os.makedirs(args.output_dir, exist_ok=True)
-    compiled.save(os.path.join(args.output_dir, "model.json"))
-    
-    # Use utility function for the final MD report
-    generate_markdown_report(
-        metrics=o_metrics,
-        output_dir=args.output_dir,
-        title=f"Optimization: {args.optimizer}",
-        model_name=args.student_model,
-        dataset_name="Spider Cleaned"
-    )
-    
-    logger.info(f"Optimization Complete. Improvement: {o_metrics['result_match_pct'] - b_metrics['result_match_pct']:+.2f}%")
 
 if __name__ == "__main__":
     main()

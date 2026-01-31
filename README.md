@@ -4,38 +4,83 @@
 
 **Compare and evaluate different LLM-based approaches for Text-to-SQL generation**, from simple prompting to advanced optimization and fine-tuning.
 
+**Console Scripts:**
+- `nl2sql-baseline` - Baseline evaluation (zero-shot, few-shot, self-correction)
+- `nl2sql-dspy` - DSPy optimization with configurable optimizers
+- `nl2sql-sft-eval` - Fine-tuned model evaluation
+
 **Methods covered:**
 - Zero-shot prompting
 - Few-shot in-context learning
 - Self-correction with execution feedback
-- DSPy few-shot optimization
+- DSPy few-shot optimization (YAML configurable)
+- OpenEvolve 
+- TextGrad prompt optimization
 - LoRA fine-tuning (parameter-efficient)
-- *Coming soon: TextGrad prompt optimization*
 
 **Bonus:** 750K+ curated training examples from 5 datasets (Spider, SQaLe, Gretel, SQL-Context, Know-SQL) for reproducible experiments.
+
+**[Read the full analysis here](https://asad-ismail.github.io/)** for detailed insights, methodology, and lessons learned.
+
+## Results Summary
+
+Performance on Spider dev set (1,034 examples):
+
+### CodeLlama-7B Results
+
+| Method | Valid SQL % | Execution Match % | Total Tokens | LLM Calls | Notes |
+|--------|-------------|-------------------|--------------|-----------|-------|
+| **Baseline Methods (Random Examples)** |
+| Zero-Shot | 84.2% | 56.7% | 285K | 1,034 | Fast baseline |
+| Few-Shot (random) | 83.8% | 56.7% | N/A | N/A | Random examples degraded performance |
+| Self-Correction | 87.8% | 58.7% | N/A | N/A | +2% gain with random examples |
+| **Baseline Methods (BM25 Retrieval)** |
+| Zero-Shot | 84.2% | 56.7% | 285K | 1,034 | Same performance |
+| Few-Shot (BM25) | **91.6%** | **75.7%** | 447K | 1,034 | **+19% gain with semantic retrieval** |
+| Self-Correction | 89.8% | 59.6% | 1.25M | 3,081 | +3% gain, 3x more tokens |
+| **Optimized Methods** |
+| DSPy (MIPRO) | 84.0% | 59.0% | ~0s* | ~0* | Matches Self-Correction instantly |
+| **Fine-Tuned** |
+| Unsloth LoRA | **90.1%** | **73.0%** | N/A | N/A | **Best 7B Result (+14% gain)** |
+
+### Llama-3-70B Reference
+
+| Method | Valid SQL % | Execution Match % | Notes |
+|--------|-------------|-------------------|-------|
+| Zero-Shot | 98.8% | 78.3% | Large model ceiling |
+| Self-Correction | 99.4% | 79.7% | State-of-the-art range |
+
+*DSPy optimization time amortized across queries after initial training
+
+**Key Findings:**
+- **Random few-shot fails**: Random examples provide no benefit (56.7% vs 56.7%)
+- **BM25 Few-Shot wins**: Semantic retrieval delivers +19% gain (75.7% vs 56.7%)
+- **Self-correction marginal**: Only +3% gain for 4.4x more tokens (1.25M vs 285K)
+- **Fine-tuning competitive**: LoRA matches BM25 few-shot (73.0% vs 75.7%)
+- **Token efficiency**: Few-shot adds only 162K tokens for +19% accuracy gain
+- **70B ceiling**: Large models approach 80% execution accuracy
 
 ## Installation
 
 ```bash
-# Install uv package manager
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
 # Clone repository
 git clone https://github.com/Asad-Ismail/nl2sql.git
 cd nl2sql
 
-# Install dependencies
-uv sync
-source .venv/bin/activate
+# Install with dependencies
+pip install -e .
+
+# Set API keys for cloud providers (optional)
+cp .env.example .env
+# Edit .env and add your API keys
 ```
 
 ## Baseline Evaluation
 
-Evaluate 3 baseline approaches on Spider dev set (1,034 examples):
+Evaluate 3 baseline approaches (zero-shot, few-shot, self-correction) on Spider dev set:
 
 ```bash
-#  Start vLLM server (CodeLlama-7B with AWQ quantization)
-## you can reduce context size if not optmizing for fewshot and corresponding gpu utilization e.g context size 2048 with gpu usage of 0.4
+# Start vLLM server (REQUIRED for local model evaluation)
 vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
     --host 0.0.0.0 \
     --port 8000 \
@@ -43,51 +88,66 @@ vllm serve TheBloke/CodeLlama-7B-Instruct-AWQ \
     --gpu-memory-utilization 0.8 \
     --max-model-len 8048 \
     --chat-template models/codellama_chat.jinja
-    
 
-#  Run evaluation (in another terminal)
-python src/nl2sql/eval/baseline.py --num-samples 100  # Quick test
-python src/nl2sql/eval/baseline.py                    # Full evaluation
+# Then run baseline evaluation in another terminal
+nl2sql-baseline --model codellama_7b --num-samples 100
+
+# Cloud providers (no server needed, just set API key)
+nl2sql-baseline --model claude_sonnet --num-samples 100
+nl2sql-baseline --model llama_70b_nvidia --num-samples 100
+nl2sql-baseline --model gpt4o --num-samples 100
+
+# Full evaluation (all 1,034 Spider dev examples)
+nl2sql-baseline --model codellama_7b
+
+# Customize methods and retrieval
+nl2sql-baseline --model codellama_7b --methods zero_shot few_shot
+nl2sql-baseline --model codellama_7b --retriever semantic
+nl2sql-baseline --model codellama_7b --methods few_shot --retriever semantic
 ```
 
-Results saved to `results/baseline/` with detailed reports.
+**Available models:** `codellama_7b`, `deepseek_coder_7b`, `mistral_7b`, `claude_sonnet`, `llama_70b_nvidia`, `gpt4o`, etc. (see `src/nl2sql/optim/configs/llm/providers.yaml`)
+
+**Default settings:** Runs all 3 methods (zero-shot, few-shot, self-correction) with BM25 retrieval for few-shot examples.
+
+Results saved to `results/baseline_<model>/` with detailed reports.
 
 ## DSPy Optimization
 
-Optimize prompts using DSPy's BootstrapFewShotWithRandomSearch:
+Optimize prompts using DSPy optimizers with YAML configuration:
 
 ```bash
-# Run DSPy optimization (requires vLLM server)
-python src/nl2sql/optim/dspy_fewshot.py
+# Run with default config
+nl2sql-dspy --config src/nl2sql/optim/configs/default.yaml
 
-# Generates before/after comparison reports
-# Results saved to: results/dspy_optimized/
+# Override config via CLI
+nl2sql-dspy --config src/nl2sql/optim/configs/default.yaml \
+    --optimizer MIPRO --train_size 1000 --output_dir results/mipro_run
 ```
 
-## Evaluation Methods
+**Available optimizers:**
+| Optimizer | Description | Best For |
+|-----------|-------------|----------|
+| `LabeledFewShot` | Simple k random examples | Quick baseline |
+| `BootstrapFewShot` | Teacher-generated demos | Small datasets |
+| `BootstrapFewShotWithRandomSearch` | Random search over demos | General use |
+| `KNNFewShot` | k-Nearest Neighbors per query | Diverse SQL patterns |
+| `COPRO` | Coordinate ascent for instructions | Instruction tuning |
+| `MIPRO` | Bayesian optimization | Best quality |
 
-**Methods compared:**
-1. **Zero-shot**: Direct question-to-SQL conversion (no examples)
-2. **Few-shot**: With 2 similar examples as context
-3. **Self-correction**: Iterative refinement with execution feedback (up to 3 attempts)
-4. **DSPy Optimization**: Automated few-shot example selection
-5. **Fine-tuned (LoRA)**: Model fine-tuned on training data
+Results saved to `results/dspy_optimized/` with model and reports.
 
-All methods include complexity tracking (JOIN, GROUP BY, subqueries, etc.) and detailed reports.
+## TextGrad Optimization
 
-## Results Comparison
+Optimize system prompts using gradient-based feedback:
 
-Expected performance on Spider dev set (1,034 examples) with CodeLlama-7B:
+```bash
+# Run TextGrad optimization (requires NVIDIA API key)
+export NVIDIA_API_KEY=your_key
+python src/nl2sql/optim/textgrad_optim.py --epochs 3 --batch_size 3
 
-| Method | Valid SQL % | Avg Time (s) | Notes |
-|--------|-------------|--------------|-------|
-| Zero-shot | 40-50% | 2-3 | Baseline |
-| Few-shot | 55-65% | 3-4 | +2 examples |
-| Self-correction | 65-75% | 5-8 | Up to 3 attempts |
-| DSPy Optimized | 70-80% | 3-5 | Optimized examples |
-| Fine-tuned (LoRA) | 75-85% | 2-3 | Full training |
-
-*Note: Results vary based on model, prompt template, and evaluation settings.*
+# Results saved to: results/textgrad_v3/
+```
 
 ## Training
 
@@ -98,7 +158,7 @@ Expected performance on Spider dev set (1,034 examples) with CodeLlama-7B:
 python src/nl2sql/train/train_unsloth_complete.py
 
 # Evaluate fine-tuned model
-python src/nl2sql/eval/sft.py --model-path models/your-model
+nl2sql-sft-eval --model models/your-model --num-samples 100
 ```
 
 **Optional:** Download and prepare datasets locally:
@@ -128,6 +188,39 @@ python src/nl2sql/data/prepare_unsloth_data.py
 
 Standard SQL only (SQLite/PostgreSQL/MySQL) - no dialect-specific extensions.
 
+## LLM Provider System
+
+Unified provider system supports multiple LLM backends with configurable rate limiting:
+
+```python
+from nl2sql.llm import get_llm
+
+# Use local vLLM
+llm = get_llm("codellama_7b")
+response = llm.generate_text("Convert to SQL: show all users")
+
+# Switch to Claude
+llm = get_llm("claude_sonnet")
+
+# Use with DSPy
+from nl2sql.llm.dspy_adapter import configure_dspy_from_config
+student_lm, teacher_lm = configure_dspy_from_config(
+    student_model="codellama_7b",
+    teacher_model="llama_70b_nvidia"
+)
+```
+
+**Supported Providers:**
+| Provider | Type | Models |
+|----------|------|--------|
+| vLLM (local) | OpenAI-compatible | CodeLlama, DeepSeek, Mistral |
+| NVIDIA NIM | OpenAI-compatible | Llama 70B/405B, Kimi K2 |
+| Anthropic | Native SDK | Claude Sonnet/Haiku/Opus |
+| OpenRouter | OpenAI-compatible | Any model on OpenRouter |
+| OpenAI | Native | GPT-4o, GPT-4o-mini |
+
+Configure in `src/nl2sql/optim/configs/llm/providers.yaml`.
+
 ## Project Structure
 
 ```
@@ -135,8 +228,14 @@ nl2sql/
 ├── src/nl2sql/
 │   ├── data/          # Dataset download and preprocessing
 │   ├── train/         # Training scripts (Unsloth/LoRA)
-│   ├── eval/          # Evaluation (baseline, SFT, DSPy)
-│   ├── optim/         # DSPy few-shot optimization
+│   ├── eval/          # Evaluation (baseline, SFT)
+│   ├── llm/           # Unified LLM provider system
+│   │   ├── config.py  # Provider config schemas
+│   │   ├── factory.py # Provider factory with rate limiting
+│   │   └── dspy_adapter.py  # DSPy integration
+│   ├── optim/         # DSPy and TextGrad optimization
+│   │   ├── configs/   # YAML configuration files
+│   │   └── optimizers.py  # Optimizer registry
 │   └── utils/         # Shared utilities (SQL execution, metrics)
 ├── models/            # Tokenizer configs and chat templates
 ├── data/              # Dataset documentation
@@ -149,6 +248,15 @@ nl2sql/
 - GPU with 16GB+ VRAM (for 7B model inference)
 - ~5GB disk for Spider evaluation data
 - ~20GB for full training datasets (if downloading locally)
+
+## Learn More
+
+📖 **[Read the detailed analysis on my blog](https://asad-ismail.github.io/)** covering:
+- Why few-shot learning degraded performance
+- Self-correction vs DSPy optimization trade-offs
+- Fine-tuning strategies and data preparation
+- Comparative analysis across model sizes
+- Recommendations for production deployments
 
 ## Citation
 

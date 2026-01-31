@@ -1,0 +1,54 @@
+{
+  "includeCoAuthoredBy": true,
+  "env": {
+    "INSIDE_CLAUDE_CODE": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": "420000",
+    "BASH_MAX_TIMEOUT_MS": "420000"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$(git branch --show-current)\" != \"main\" ] || { echo '{\"block\": true, \"message\": \"Cannot edit files on main branch. Create a feature branch first.\"}' >&2; exit 2; }",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in *.py) uv run black \"$CLAUDE_TOOL_INPUT_FILE_PATH\" --line-length 100 --quiet 2>&1; uv run ruff check \"$CLAUDE_TOOL_INPUT_FILE_PATH\" --fix 2>&1; echo '{\"feedback\": \"Formatted with black and ruff.\", \"suppressOutput\": true}'; esac",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in *test*.py) echo '{\"feedback\": \"Running tests...\"}' >&2; uv run pytest \"$CLAUDE_TOOL_INPUT_FILE_PATH\" -v 2>&1 | tail -20; exit_code=$?; if [ $exit_code -eq 0 ]; then echo '{\"feedback\": \"Tests passed.\"}'; else echo '{\"feedback\": \"Tests failed. See output above.\"}' >&2; fi; esac",
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_TOOL_INPUT_FILE_PATH\" in *.py) uv run mypy \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>&1 | head -10 || true; echo '{\"feedback\": \"mypy check complete.\", \"suppressOutput\": true}'; esac",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
