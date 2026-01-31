@@ -30,14 +30,10 @@ Performance on Spider dev set (1,034 examples):
 
 | Method | Valid SQL % | Execution Match % | Total Tokens | LLM Calls | Notes |
 |--------|-------------|-------------------|--------------|-----------|-------|
-| **Baseline Methods (Random Examples)** |
-| Zero-Shot | 83.7% | 57.3% | N/A | N/A | Fast baseline |
-| Few-Shot (random) | 83.8% | 56.7% | N/A | N/A | Random examples degraded performance |
-| Self-Correction | 87.8% | 58.7% | N/A | N/A | +1.4% gain, but 7x slower |
 | **Baseline Methods (BM25 Retrieval)** |
-| Zero-Shot | 83.8% | 57.2% | 657K | 1,034 | Same performance |
-| Few-Shot (BM25) | **90.5%** | **74.1%** | 2.73M | 3,102 | **+17% gain with semantic retrieval** |
-| Self-Correction | 87.9% | 59.0% | 5.46M | 7,613 | Minimal gain over zero-shot |
+| Zero-Shot | 84.2% | 56.7% | 285K | 1,034 | Fast baseline |
+| Few-Shot (BM25) | **91.6%** | **75.7%** | 447K | 1,034 | **+19% gain with semantic retrieval** |
+| Self-Correction | 89.8% | 59.6% | 1.25M | 3,081 | +3% gain, 3x more tokens |
 | **Optimized Methods** |
 | DSPy (MIPRO) | 84.0% | 59.0% | ~0s* | ~0* | Matches Self-Correction instantly |
 | **Fine-Tuned** |
@@ -53,10 +49,10 @@ Performance on Spider dev set (1,034 examples):
 *DSPy optimization time amortized across queries after initial training
 
 **Key Findings:**
-- **BM25 Few-Shot wins**: Semantic example retrieval delivers +17% gain (74.1% vs 57.2%)
-- **Random few-shot fails**: Random examples degraded performance (56.7% vs 57.3%)
-- **Fine-tuning competitive**: LoRA matches BM25 few-shot (73.0% vs 74.1%)
-- **Self-correction marginal**: Only +2% gain for 3x more LLM calls
+- **BM25 Few-Shot wins**: Semantic example retrieval delivers +19% gain (75.7% vs 56.7%)
+- **Self-correction marginal**: Only +3% gain for 4.4x more tokens (1.25M vs 285K)
+- **Fine-tuning competitive**: LoRA matches BM25 few-shot (73.0% vs 75.7%)
+- **Token efficiency**: Few-shot adds only 162K tokens for +19% accuracy gain
 - **70B ceiling**: Large models approach 80% execution accuracy
 
 ## Installation
