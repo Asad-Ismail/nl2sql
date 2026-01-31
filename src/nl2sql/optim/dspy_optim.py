@@ -21,8 +21,10 @@ from nl2sql.utils.util import (
     execute_sql,
     extract_sql_from_text,
     generate_markdown_report,
+    generate_optimizer_markdown_report,
     get_db_path,
     load_schemas,
+    print_token_statistics,
     TokenStats,
 )
 
@@ -376,6 +378,54 @@ def run_optimization(config: DSPyOptimizerConfig):
             json.dump(token_stats, f, indent=2)
         logger.info(f"Token statistics saved to: {token_stats_path}")
         logger.info(f"Token usage: {token_stats}")
+
+        # Print console output and generate detailed markdown report with token breakdown
+        student_tokens = token_stats.get("tokens", {})
+
+        # Check if teacher model was used by examining teacher_lm
+        teacher_tokens = None
+        if teacher_lm and hasattr(teacher_lm, 'history'):
+            teacher_stats = TokenStats()
+            for entry in teacher_lm.history:
+                usage = entry.kwargs.get('usage') if hasattr(entry, 'kwargs') else {}
+                if isinstance(usage, dict):
+                    prompt_tokens = usage.get('prompt_tokens', 0)
+                    completion_tokens = usage.get('completion_tokens', 0)
+                    if prompt_tokens or completion_tokens:
+                        teacher_stats.add(prompt_tokens, completion_tokens)
+            if teacher_stats.total_calls > 0:
+                teacher_tokens = teacher_stats.to_dict()
+
+        # Print console output
+        print(f"\n{'='*60}")
+        print("OPTIMIZATION RESULTS")
+        print(f"{'='*60}\n")
+
+        print(f"{config.optimizer.name.upper()}")
+        print(f"  Valid SQL: {o_metrics['valid_sql_count']}/{o_metrics['total_examples']} ({o_metrics['valid_sql_pct']:.1f}%)")
+        print(f"  Results Match Gold: {o_metrics['result_match_count']}/{o_metrics['total_examples']} ({o_metrics['result_match_pct']:.1f}%)")
+        print()
+
+        # Print token statistics
+        print_token_statistics(
+            student_tokens=student_tokens,
+            teacher_tokens=teacher_tokens,
+            title="TOKEN STATISTICS"
+        )
+
+        # Generate detailed markdown report
+        generate_optimizer_markdown_report(
+            metrics=o_metrics,
+            student_tokens=student_tokens,
+            teacher_tokens=teacher_tokens,
+            output_dir=output_dir,
+            title=f"Optimization: {config.optimizer.name}",
+            model_name=config.models.student.name,
+            dataset_name="Spider Cleaned",
+            optimizer_name=config.optimizer.name,
+        )
+
+        logger.info(f"Detailed report saved to: {output_dir}/evaluation_report.md")
 
         if b_metrics:
             improvement = o_metrics["result_match_pct"] - b_metrics["result_match_pct"]

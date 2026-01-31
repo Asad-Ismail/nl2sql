@@ -26,6 +26,8 @@ from nl2sql.utils.util import (
     get_db_path,
     TokenStats,
     extract_token_usage,
+    print_token_statistics,
+    generate_optimizer_markdown_report,
 )
 
 # Configuration
@@ -293,6 +295,41 @@ Match: {match}""".strip()
     )
 
     logger.info(f"Results saved to {config.experiment.output_dir}")
+
+    # Print console output and generate detailed markdown report with token breakdown
+    print(f"\n{'='*60}")
+    print("OPTIMIZATION RESULTS")
+    print(f"{'='*60}\n")
+
+    print("TEXTGRAD")
+    print(f"  Valid SQL: {final_result.metrics['valid_sql_count']}/{final_result.metrics['total_examples']} ({final_result.metrics['valid_sql_pct']:.1f}%)")
+    print(f"  Results Match Gold: {final_result.metrics['result_match_count']}/{final_result.metrics['total_examples']} ({final_result.metrics['result_match_pct']:.1f}%)")
+    print()
+
+    # Extract student and teacher tokens
+    student_tokens = final_result.token_stats
+    teacher_tokens = final_result.token_stats.get("teacher_tokens") if config.models.teacher_model else None
+
+    # Print token statistics
+    print_token_statistics(
+        student_tokens=student_tokens,
+        teacher_tokens=teacher_tokens,
+        title="TOKEN STATISTICS"
+    )
+
+    # Generate detailed markdown report with token breakdown
+    generate_optimizer_markdown_report(
+        metrics=final_result.metrics,
+        student_tokens=student_tokens,
+        teacher_tokens=teacher_tokens,
+        output_dir=config.experiment.output_dir,
+        title="TextGrad Optimization Results",
+        model_name=config.models.student_model,
+        dataset_name=config.data.dataset_name,
+        optimizer_name="TextGrad",
+    )
+
+    logger.info(f"Detailed report saved to: {config.experiment.output_dir}/evaluation_report.md")
 
 
 if __name__ == "__main__":

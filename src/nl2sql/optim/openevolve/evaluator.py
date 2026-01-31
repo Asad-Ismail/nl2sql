@@ -32,6 +32,8 @@ from nl2sql.utils.util import (
     get_db_path,
     TokenStats,
     extract_token_usage,
+    print_token_statistics,
+    generate_optimizer_markdown_report,
 )
 
 # Optional: OpenEvolve structured result (newer versions).
@@ -158,6 +160,37 @@ def evaluate(program_path: str) -> Any:
                 dataset_name="Spider (sampled)",
                 artifacts=artifacts,
             )
+
+            # Print console output and generate detailed markdown report with token breakdown
+            print(f"\n{'='*60}")
+            print("OPTIMIZATION RESULTS")
+            print(f"{'='*60}\n")
+
+            print("OPENEVOLVE")
+            print(f"  Valid SQL: {eval_result.metrics['valid_sql_count']}/{eval_result.metrics['total_examples']} ({eval_result.metrics['valid_sql_pct']:.1f}%)")
+            print(f"  Results Match Gold: {eval_result.metrics['result_match_count']}/{eval_result.metrics['total_examples']} ({eval_result.metrics['result_match_pct']:.1f}%)")
+            print()
+
+            # Print token statistics (OpenEvolve has no teacher model)
+            print_token_statistics(
+                student_tokens=eval_result.token_stats,
+                teacher_tokens=None,  # OpenEvolve has no teacher model
+                title="TOKEN STATISTICS"
+            )
+
+            # Generate detailed markdown report
+            generate_optimizer_markdown_report(
+                metrics=eval_result.metrics,
+                student_tokens=eval_result.token_stats,
+                teacher_tokens=None,  # OpenEvolve has no teacher model
+                output_dir=output_dir,
+                title="OpenEvolve Optimization Results",
+                model_name=student_model_name,
+                dataset_name="Spider (sampled)",
+                optimizer_name="OpenEvolve",
+            )
+
+            logger.info(f"Detailed report saved to: {output_dir}/evaluation_report.md")
 
         if EvaluationResult is not None:
             return EvaluationResult(metrics=out_metrics)

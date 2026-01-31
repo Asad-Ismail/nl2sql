@@ -622,3 +622,153 @@ def extract_token_usage(usage: Optional[Dict[str, int]]) -> Dict[str, int]:
         "completion_tokens": usage.get("completion_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
     }
+
+
+# =============================================================================
+# Token Statistics Printing for Optimization Scripts
+# =============================================================================
+
+
+def print_token_statistics(
+    student_tokens: Dict[str, int],
+    teacher_tokens: Optional[Dict[str, int]] = None,
+    title: str = "TOKEN STATISTICS",
+) -> None:
+    """
+    Print student and teacher token statistics in formatted table.
+
+    Matches baseline.py's "PER-METHOD TOKEN STATISTICS" section format,
+    but shows student vs teacher instead of per-method breakdown.
+
+    Args:
+        student_tokens: TokenStats.to_dict() from student model
+        teacher_tokens: Optional TokenStats.to_dict() from teacher model
+        title: Section title
+    """
+    print(f"{'='*60}")
+    print(title)
+    print(f"{'='*60}")
+
+    # Student statistics
+    print("STUDENT MODEL:")
+    print(f"  LLM Calls:        {student_tokens['total_calls']:,}")
+    print(f"  Total Tokens:      {student_tokens['total_tokens']:,}")
+    print(f"  Prompt Tokens:     {student_tokens['total_prompt_tokens']:,}")
+    print(f"  Completion Tokens: {student_tokens['total_completion_tokens']:,}")
+
+    # Teacher statistics (if available)
+    if teacher_tokens:
+        print()
+        print("TEACHER MODEL:")
+        print(f"  LLM Calls:        {teacher_tokens['total_calls']:,}")
+        print(f"  Total Tokens:      {teacher_tokens['total_tokens']:,}")
+        print(f"  Prompt Tokens:     {teacher_tokens['total_prompt_tokens']:,}")
+        print(f"  Completion Tokens: {teacher_tokens['total_completion_tokens']:,}")
+
+        # Combined totals
+        print()
+        print("COMBINED TOTALS:")
+        total_calls = student_tokens['total_calls'] + teacher_tokens['total_calls']
+        total_tokens = student_tokens['total_tokens'] + teacher_tokens['total_tokens']
+        total_prompt = student_tokens['total_prompt_tokens'] + teacher_tokens['total_prompt_tokens']
+        total_completion = student_tokens['total_completion_tokens'] + teacher_tokens['total_completion_tokens']
+        print(f"  LLM Calls:        {total_calls:,}")
+        print(f"  Total Tokens:      {total_tokens:,}")
+        print(f"  Prompt Tokens:     {total_prompt:,}")
+        print(f"  Completion Tokens: {total_completion:,}")
+
+    print(f"{'='*60}\n")
+
+
+def generate_optimizer_markdown_report(
+    metrics: Dict[str, Any],
+    student_tokens: Dict[str, int],
+    teacher_tokens: Optional[Dict[str, int]] = None,
+    output_dir: str = "",
+    filename: str = "evaluation_report.md",
+    title: str = "Optimization Results",
+    model_name: str = "",
+    dataset_name: str = "",
+    optimizer_name: str = "",
+    additional_sections: Optional[Dict[str, str]] = None,
+) -> str:
+    """
+    Generate markdown report for optimization results.
+
+    Similar to generate_markdown_report() but includes student/teacher token breakdown.
+
+    Args:
+        metrics: Metrics dictionary from calculate_metrics()
+        student_tokens: TokenStats.to_dict() from student model
+        teacher_tokens: Optional TokenStats.to_dict() from teacher model
+        output_dir: Directory to save report
+        filename: Report filename
+        title: Report title
+        model_name: Student model name
+        dataset_name: Dataset name
+        optimizer_name: Optimizer name (e.g., "MIPRO", "TextGrad")
+        additional_sections: Additional markdown sections
+
+    Returns:
+        Path to saved report
+    """
+    from pathlib import Path
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    report = f"# {title}\n\n"
+
+    if optimizer_name:
+        report += f"**Optimizer:** {optimizer_name}\n\n"
+    if model_name:
+        report += f"**Student Model:** {model_name}\n\n"
+    if dataset_name:
+        report += f"**Dataset:** {dataset_name}\n\n"
+
+    # Summary section
+    report += "## Summary\n\n"
+    if "total_examples" in metrics:
+        report += f"- **Total Examples:** {metrics['total_examples']}\n"
+        report += f"- **Valid SQL:** {metrics['valid_sql_count']} ({metrics['valid_sql_pct']:.2f}%)\n"
+        report += f"- **Results Match Gold:** {metrics['result_match_count']} ({metrics['result_match_pct']:.2f}%)\n"
+        if "avg_inference_time" in metrics:
+            report += f"- **Avg Inference Time:** {metrics['avg_inference_time']:.2f}s\n"
+
+    # Token statistics section
+    report += "\n## Token Usage\n\n"
+    report += "### Student Model\n\n"
+    report += f"- **LLM Calls:** {student_tokens['total_calls']:,}\n"
+    report += f"- **Total Tokens:** {student_tokens['total_tokens']:,}\n"
+    report += f"- **Prompt Tokens:** {student_tokens['total_prompt_tokens']:,}\n"
+    report += f"- **Completion Tokens:** {student_tokens['total_completion_tokens']:,}\n"
+
+    if teacher_tokens:
+        report += "\n### Teacher Model\n\n"
+        report += f"- **LLM Calls:** {teacher_tokens['total_calls']:,}\n"
+        report += f"- **Total Tokens:** {teacher_tokens['total_tokens']:,}\n"
+        report += f"- **Prompt Tokens:** {teacher_tokens['total_prompt_tokens']:,}\n"
+        report += f"- **Completion Tokens:** {teacher_tokens['total_completion_tokens']:,}\n"
+
+        report += "\n### Combined Totals\n\n"
+        total_calls = student_tokens['total_calls'] + teacher_tokens['total_calls']
+        total_tokens = student_tokens['total_tokens'] + teacher_tokens['total_tokens']
+        total_prompt = student_tokens['total_prompt_tokens'] + teacher_tokens['total_prompt_tokens']
+        total_completion = student_tokens['total_completion_tokens'] + teacher_tokens['total_completion_tokens']
+        report += f"- **Total LLM Calls:** {total_calls:,}\n"
+        report += f"- **Total Tokens:** {total_tokens:,}\n"
+        report += f"- **Total Prompt Tokens:** {total_prompt:,}\n"
+        report += f"- **Total Completion Tokens:** {total_completion:,}\n"
+
+    # Add additional sections
+    if additional_sections:
+        for section_title, section_content in additional_sections.items():
+            report += f"\n## {section_title}\n\n"
+            report += section_content + "\n"
+
+    # Save report
+    report_path = output_path / filename
+    with open(report_path, "w") as f:
+        f.write(report)
+
+    return str(report_path)
